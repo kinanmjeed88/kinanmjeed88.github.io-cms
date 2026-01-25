@@ -267,7 +267,7 @@ export const Settings: React.FC = () => {
                                     </div>
                                     <div>
                                         <span className="text-accent block mb-1"># الألوان المكتشفة:</span>
-                                        <p>[{aiKnowledge.colorsDetected.join(', ')}]</p>
+                                        <p>[{aiKnowledge.colorsDetected?.join(', ') || 'N/A'}]</p>
                                     </div>
                                 </div>
                             ) : (
