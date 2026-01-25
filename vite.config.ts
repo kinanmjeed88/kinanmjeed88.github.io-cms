@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   // This base URL allows the app to run in a subdirectory (repo name)
-  base: '/Kinan-touch-AD-google/',
+  base: '/kinanmjeed88.github.io-cms/',
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
