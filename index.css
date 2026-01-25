@@ -6,10 +6,21 @@
   color-scheme: dark;
 }
 
+html, body {
+  overflow-x: hidden; /* Prevent horizontal scroll */
+  font-size: 14px; /* Smaller base font for mobile */
+}
+
+@media (min-width: 768px) {
+  html, body {
+    font-size: 16px;
+  }
+}
+
 /* Custom Scrollbar for the CMS */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px; /* Thinner for mobile */
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: #0f172a; 
@@ -20,4 +31,9 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #475569; 
+}
+
+/* Ensure inputs don't zoom on iOS */
+input, textarea, select {
+  font-size: 16px !important; 
 }
