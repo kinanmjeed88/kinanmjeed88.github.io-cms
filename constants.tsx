@@ -101,4 +101,4 @@ export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
     <!-- Scripts -->
     <script src="assets/js/main.js"></script>
 </body>
-</html>
+</html>`;
