@@ -390,7 +390,7 @@ const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
 <div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
     <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
     <!-- رابط وصورة إعلانك الخاص -->
-    <a href="${linkUrl}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
+    <a href="${linkUrl || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
         <img src="${imageUrl}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
     </a>
 </div>`;
@@ -404,10 +404,10 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         
         let updatedCount = 0;
         
-        // If imageUrl is provided, we use the CUSTOM ONLY template (Guide Section 3)
-        // If NO imageUrl, we revert to HYBRID default (requires manual slot logic, but usually user wants Custom)
-        const isCustomOnly = !!imageUrl;
-        const newAdHtml = isCustomOnly 
+        // Ensure imageUrl is valid (not empty, not undefined string)
+        const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
+        
+        const newAdHtml = validCustomImage
             ? CUSTOM_AD_TEMPLATE(imageUrl, linkUrl) 
             : HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlotId);
 
@@ -635,7 +635,12 @@ export const parseTicker = async (): Promise<TickerData> => {
         const { content } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
         const marquee = doc.querySelector('marquee');
-        return { text: marquee?.textContent?.trim() || '', link: '#' };
+        // Fix: Check for anchor tag inside marquee
+        const anchor = marquee?.querySelector('a');
+        return { 
+            text: anchor?.textContent?.trim() || marquee?.textContent?.trim() || '', 
+            link: anchor?.getAttribute('href') || '#' 
+        };
     } catch { return { text: '', link: '' }; }
 };
 
@@ -645,7 +650,16 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
         const { content, sha } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
         const marquee = doc.querySelector('marquee');
-        if (marquee) marquee.textContent = text;
+        if (marquee) {
+            // Fix: Create or update anchor tag inside marquee
+            marquee.innerHTML = ''; // Clear previous content
+            const a = doc.createElement('a');
+            a.href = link;
+            a.textContent = text;
+            a.style.color = 'inherit';
+            a.style.textDecoration = 'none';
+            marquee.appendChild(a);
+        }
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(doc), "Update Ticker", sha);
         onProgress("تم التحديث!");
     } catch(e: any) { throw new Error(e.message); }
@@ -695,6 +709,10 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
         const files = await response.json();
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
 
+        // Cache busting: Append timestamp
+        const cleanUrl = url.split('?')[0]; 
+        const newSrc = `${cleanUrl}?v=${Date.now()}`;
+
         for (const file of htmlFiles) {
             try {
                 const { content, sha } = await getFile(file.path);
@@ -702,8 +720,9 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 const imgs = Array.from(doc.querySelectorAll('img'));
                 let modified = false;
                 imgs.forEach(img => {
-                    if (img.src.includes('profile') || img.src.includes('me.jpg') || img.classList.contains('rounded-full')) {
-                        img.src = url;
+                    const src = img.getAttribute('src') || '';
+                    if (src.includes('profile') || src.includes('me.jpg') || img.classList.contains('rounded-full')) {
+                        img.setAttribute('src', newSrc);
                         modified = true;
                     }
                 });
