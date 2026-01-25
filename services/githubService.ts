@@ -688,6 +688,165 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
     });
 };
 
+// --- SOCIAL & ANALYSIS ---
+
+export const getSocialLinks = async (): Promise<SocialLinks> => {
+    try {
+        const { content } = await getFile(RepoConfig.INDEX_FILE);
+        // Simple regex extraction
+        const extract = (domain: string) => {
+            const regex = new RegExp(`href=["'](https?:\\/\\/(?:www\\.)?${domain}\\/[^"']+)["']`, 'i');
+            const match = content.match(regex);
+            return match ? match[1] : '';
+        };
+
+        return {
+            facebook: extract('facebook.com'),
+            instagram: extract('instagram.com'),
+            tiktok: extract('tiktok.com'),
+            youtube: extract('youtube.com'),
+            telegram: extract('t.me') || extract('telegram.org')
+        };
+    } catch {
+        return { facebook: '', instagram: '', tiktok: '', youtube: '', telegram: '' };
+    }
+};
+
+export const updateSocialLinks = async (links: SocialLinks, onProgress: (msg: string) => void) => {
+    onProgress("جلب قائمة الملفات...");
+    try {
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+        const files = await response.json();
+        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
+        
+        let count = 0;
+        for (const file of htmlFiles) {
+            onProgress(`فحص ${file.name}...`);
+            try {
+                const { content, sha } = await getFile(file.path);
+                const doc = new DOMParser().parseFromString(content, 'text/html');
+                let modified = false;
+
+                const updateLink = (domains: string[], newUrl: string) => {
+                    if (!newUrl) return;
+                    const anchors = Array.from(doc.querySelectorAll('a'));
+                    anchors.forEach(a => {
+                        if (domains.some(d => a.href.includes(d))) {
+                            if (a.getAttribute('href') !== newUrl) {
+                                a.setAttribute('href', newUrl);
+                                modified = true;
+                            }
+                        }
+                    });
+                };
+
+                updateLink(['facebook.com'], links.facebook);
+                updateLink(['instagram.com'], links.instagram);
+                updateLink(['tiktok.com'], links.tiktok);
+                updateLink(['youtube.com'], links.youtube);
+                updateLink(['t.me', 'telegram.org'], links.telegram);
+
+                if (modified) {
+                    onProgress(`تحديث ${file.name}...`);
+                    await updateFile(file.path, serializeHtml(doc), "Update social links", sha);
+                    count++;
+                }
+            } catch (e) {
+                console.warn(`Error updating ${file.name}`);
+            }
+        }
+        onProgress(`تم تحديث الروابط في ${count} ملف/ملفات.`);
+    } catch (e: any) {
+        throw new Error("فشل تحديث الروابط: " + e.message);
+    }
+};
+
+export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
+    onProgress("جاري تحديث الصورة في جميع الملفات...");
+    try {
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+        const files = await response.json();
+        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
+
+        let count = 0;
+        for (const file of htmlFiles) {
+            try {
+                const { content, sha } = await getFile(file.path);
+                const doc = new DOMParser().parseFromString(content, 'text/html');
+                let modified = false;
+
+                const imgs = Array.from(doc.querySelectorAll('img'));
+                imgs.forEach(img => {
+                    const src = img.getAttribute('src') || '';
+                    const alt = img.getAttribute('alt') || '';
+                    // Heuristic: Update if it looks like a profile picture
+                    if ((alt.toLowerCase().includes('profile') || 
+                         src.includes('profile') || 
+                         img.classList.contains('rounded-full')) && 
+                         !src.includes('logo') // Avoid logo if different
+                       ) {
+                        if (src !== url) {
+                            img.setAttribute('src', url);
+                            modified = true;
+                        }
+                    }
+                });
+
+                if (modified) {
+                    onProgress(`تحديث ${file.name}...`);
+                    await updateFile(file.path, serializeHtml(doc), "Update site avatar", sha);
+                    count++;
+                }
+            } catch(e) {}
+        }
+        onProgress(`تم تحديث الصورة الشخصية في ${count} صفحة!`);
+    } catch (e: any) {
+        throw new Error(e.message);
+    }
+};
+
+export const performFullSiteAnalysis = async (onProgress: (msg: string) => void): Promise<AIAnalysisKnowledge> => {
+    onProgress("جاري جلب قائمة الملفات من المستودع...");
+    const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+    const files = await response.json();
+    
+    // Select key files for analysis
+    const keyFiles = ['index.html', 'tools-sites.html', 'articles.html'];
+    // Find an article example (contains hyphen usually)
+    const articleFiles = files.filter((f: any) => f.name.endsWith('.html') && f.name.includes('-') && !keyFiles.includes(f.name));
+    
+    const filesToAnalyzeList = files.filter((f: any) => keyFiles.includes(f.name));
+    if (articleFiles.length > 0) filesToAnalyzeList.push(articleFiles[0]);
+
+    const fileContents: {name: string, content: string}[] = [];
+
+    for (const file of filesToAnalyzeList) {
+        onProgress(`قراءة محتوى ${file.name}...`);
+        try {
+            const { content } = await getFile(file.path);
+            fileContents.push({ name: file.name, content });
+        } catch (e) {
+            console.warn(`Skipping ${file.name}`);
+        }
+    }
+
+    if (fileContents.length === 0) {
+        throw new Error("لم يتم العثور على ملفات HTML لتحليلها.");
+    }
+
+    onProgress("جاري التحليل باستخدام الذكاء الاصطناعي (Gemini)...");
+    const knowledge = await analyzeSiteStructure(fileContents);
+    
+    knowledge.lastAnalyzed = new Date().toISOString();
+
+    onProgress("حفظ نتائج التحليل في metadata.json...");
+    const { data, sha } = await getMetadata();
+    data.aiKnowledge = knowledge;
+    await saveMetadata(data, sha);
+
+    return knowledge;
+};
+
 // --- MISC ---
 
 export const parseTicker = async (): Promise<TickerData> => {
@@ -727,12 +886,6 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
     } catch(e: any) { throw new Error(e.message); }
 };
 
-export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
-    onProgress("Updating global avatar...");
-    // Fetch index, articles, about... simple replace for now
-    onProgress("Not fully implemented in safe mode.");
-};
-
 export const rebuildDatabase = async (onProgress: (msg: string) => void) => {
     onProgress("Fetching all HTML files...");
     const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
@@ -760,10 +913,6 @@ export const rebuildDatabase = async (onProgress: (msg: string) => void) => {
     await saveMetadata({ name: 'TechTouch', description: 'Recovered', articles });
     onProgress("Database Rebuilt!");
 };
-
-export const getSocialLinks = async (): Promise<SocialLinks> => { return {facebook:'',instagram:'',tiktok:'',youtube:'',telegram:''}; };
-export const updateSocialLinks = async (links: SocialLinks, onProgress: (msg: string) => void) => { };
-export const performFullSiteAnalysis = async (onProgress: (msg: string) => void): Promise<AIAnalysisKnowledge> => { return {} as any; };
 
 export const updateCardInFile = async (filePath: string, fileName: string, data: ArticleContent) => {
     try {
