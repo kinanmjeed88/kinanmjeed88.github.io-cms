@@ -13,7 +13,7 @@ export const HYBRID_AD_TEMPLATE = (imageUrl: string, linkUrl: string, slotId: st
     <!-- شارة تعريف الإعلان -->
     <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">مساحة إعلانية</div>
 
-    <!-- 1. Google AdSense (يغطي الصورة عند التحميل) -->
+    <!-- 1. Google AdSense -->
     <div class="relative z-10 w-full min-h-[280px] flex justify-center items-center">
         <ins class="adsbygoogle"
              style="display:block; width:100%; min-width:300px;"
@@ -24,13 +24,14 @@ export const HYBRID_AD_TEMPLATE = (imageUrl: string, linkUrl: string, slotId: st
         <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
     </div>
 
-    <!-- 2. صورة بديلة (تظهر إذا لم يحمل جوجل) -->
+    <!-- 2. صورة بديلة -->
     <a href="${linkUrl}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900">
         <img src="${imageUrl}" alt="Advertisement" class="w-full h-full object-cover opacity-90 hover:opacity-100 transition-opacity" onerror="this.style.display='none'" />
     </a>
 </div>`;
 
 // Based on article-capcut.html structure logic
+// REMOVED AD_SLOT_TOP to comply with strict guide rules
 export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -83,9 +84,6 @@ export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
                     </span>
                 </div>
 
-                <!-- Top Ad Slot -->
-                {{AD_SLOT_TOP}}
-
                 <!-- Content -->
                 <div class="prose prose-lg dark:prose-invert max-w-none leading-relaxed">
                     {{CONTENT_BODY}}
@@ -104,4 +102,3 @@ export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
     <script src="assets/js/main.js"></script>
 </body>
 </html>
-`;

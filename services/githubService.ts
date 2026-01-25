@@ -86,6 +86,15 @@ const processContentWithLinks = (text: string): string => {
     return html;
 };
 
+const getCategoryColor = (cat: string) => {
+    switch(cat) {
+        case 'apps': return 'bg-green-600';
+        case 'games': return 'bg-purple-600';
+        case 'sports': return 'bg-red-600';
+        case 'tech': default: return 'bg-blue-600';
+    }
+};
+
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
 
 export const getFile = async (path: string): Promise<{ content: string; sha: string }> => {
@@ -135,7 +144,6 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
         .replace(/{{IMAGE}}/g, data.image)
         .replace(/{{DATE}}/g, today)
         .replace(/{{CATEGORY_LABEL}}/g, CATEGORIES.find(c => c.id === data.category)?.label || data.category)
-        .replace('{{AD_SLOT_TOP}}', adHtml)
         .replace('{{AD_SLOT_BOTTOM}}', adHtml)
         .replace('{{CONTENT_BODY}}', bodyContent);
 
@@ -146,27 +154,19 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     }
 
     const createCardHtml = (article: ArticleContent, filename: string) => `
-    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col h-full hover:shadow-md transition-shadow group">
-        <a href="${filename}" class="block aspect-video overflow-hidden relative">
-            <img src="${article.image}" alt="${article.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
-            <span class="absolute top-2 right-2 bg-blue-600/90 text-white text-[10px] px-2 py-1 rounded shadow-sm">${article.category}</span>
-        </a>
-        <div class="p-4 flex flex-col flex-1">
-            <h3 class="font-bold text-base mb-2 text-slate-900 dark:text-white leading-tight">
-                <a href="${filename}" class="hover:text-blue-600 transition-colors">${article.title}</a>
-            </h3>
-            <p class="text-gray-600 dark:text-gray-400 text-xs line-clamp-2 mb-4 flex-1">
-                ${article.description}
-            </p>
-            <div class="flex items-center justify-between mt-auto pt-3 border-t border-gray-100 dark:border-gray-700">
-                <span class="text-[10px] text-gray-400">${today}</span>
-                <a href="${filename}" class="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                    قراءة المزيد
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 rtl:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                </a>
+    <a href="${filename}" class="group h-full">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl overflow-hidden shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:-translate-y-1 transition-all h-full flex flex-col relative">
+            <div class="h-52 overflow-hidden relative">
+                <img src="${article.image}" alt="${article.title}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-60"></div>
+                <div class="absolute top-4 right-4 ${getCategoryColor(article.category)} text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg z-10 flex items-center gap-1">${article.category}</div>
+            </div>
+            <div class="p-5 flex-1 flex flex-col">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2 line-clamp-2">${article.title}</h3>
+                <p class="text-gray-500 dark:text-gray-400 text-sm line-clamp-2">${article.description}</p>
             </div>
         </div>
-    </div>`;
+    </a>`;
 
     const cardHtml = createCardHtml(data, newFileName);
 
@@ -394,8 +394,16 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
 export const getMetadata = async (): Promise<{ data: MetadataRoot; sha: string }> => {
   try {
     const { content, sha } = await getFile(RepoConfig.METADATA_FILE);
-    const data = JSON.parse(content);
-    // Ensure articles array exists even if missing in JSON
+    if (!content || !content.trim()) {
+         return { data: { name: 'TechTouch', description: 'Tech News', articles: [] }, sha };
+    }
+    let data;
+    try {
+        data = JSON.parse(content);
+    } catch(e) {
+        return { data: { name: 'TechTouch', description: 'Tech News', articles: [] }, sha };
+    }
+    
     if (!data.articles || !Array.isArray(data.articles)) {
         data.articles = [];
     }
@@ -445,15 +453,20 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
     try {
         const { content } = await getFile(RepoConfig.TOOLS_SITES_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        // Heuristic: Find cards in grid. Assuming structure from previous knowledge or generic
-        const cards = Array.from(doc.querySelectorAll('.grid > div, .group'));
+        // Structure matches the Guide now: a.block > div > div.w-10...
+        const cards = Array.from(doc.querySelectorAll('a.block, .grid > a'));
         return cards.map(card => {
+            const iconEl = card.querySelector('i[data-lucide], svg');
+            const colorDiv = card.querySelector('.w-10.h-10');
+            // Try to extract color class like bg-blue-600
+            const colorClass = colorDiv ? Array.from(colorDiv.classList).find(c => c.startsWith('bg-') && !c.includes('white')) || 'bg-blue-600' : 'bg-blue-600';
+            
             return {
                 title: card.querySelector('h3')?.textContent?.trim() || 'No Title',
-                description: card.querySelector('p')?.textContent?.trim() || '',
-                link: card.querySelector('a')?.getAttribute('href') || '#',
-                icon: 'link', // Difficult to reverse engineer icon from SVG
-                colorClass: 'bg-blue-600' // Default
+                description: card.querySelector('.marquee-text-content')?.textContent?.trim() || card.querySelector('p')?.textContent?.trim() || '',
+                link: card.getAttribute('href') || '#',
+                icon: iconEl?.getAttribute('data-lucide') || 'link',
+                colorClass: colorClass
             };
         }).filter(item => item.title !== 'No Title');
     } catch (e) {
@@ -462,8 +475,6 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
 };
 
 export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: string) => void) => {
-     // This requires full rebuild or smart insertion. 
-     // For safety, we will just say "Not Implemented in Safe Mode" or try to append if grid exists.
      onProgress("Saving Directory Item...");
      try {
          const { content, sha } = await getFile(RepoConfig.TOOLS_SITES_FILE);
@@ -471,20 +482,29 @@ export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: s
          const grid = doc.querySelector('.grid');
          if(grid) {
              const div = doc.createElement('div');
-             div.className = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-start gap-4 group hover:border-blue-500 transition-colors";
+             // TEMPLATE FROM GUIDE
              div.innerHTML = `
-                <div class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${item.colorClass} text-white">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+             <a href="${item.link}" target="_blank" class="block bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750 transition-all group overflow-hidden">
+                <div class="flex items-center gap-3 h-full">
+                    <div class="w-10 h-10 ${item.colorClass} rounded-md flex items-center justify-center shrink-0 shadow-sm text-white">
+                         <i data-lucide="${item.icon}" class="w-5 h-5 text-white"></i>
+                    </div>
+                    <div class="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
+                        <h3 class="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">${item.title}</h3>
+                        <div class="marquee-text-wrap w-full">
+                            <p class="text-[11px] text-gray-500 dark:text-gray-400 marquee-text-content">${item.description}</p>
+                        </div>
+                    </div>
+                    <div class="text-gray-400 group-hover:text-blue-600 shrink-0">
+                        <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                    </div>
                 </div>
-                <div class="flex-1 min-w-0">
-                    <h3 class="font-bold text-slate-900 dark:text-white truncate">${item.title}</h3>
-                    <p class="text-sm text-gray-500 dark:text-gray-400 truncate mb-2">${item.description}</p>
-                    <a href="${item.link}" target="_blank" class="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
-                        فتح الرابط <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                    </a>
-                </div>
-             `;
-             grid.appendChild(div);
+             </a>`;
+             
+             // Append the <a> directly
+             const linkEl = div.firstElementChild;
+             if (linkEl) grid.appendChild(linkEl);
+
              await updateFile(RepoConfig.TOOLS_SITES_FILE, serializeHtml(doc), `Add Directory Item: ${item.title}`, sha);
              onProgress("تم الحفظ!");
          }
@@ -501,8 +521,8 @@ export const deleteDirectoryItem = async (link: string, onProgress: (msg: string
         const items = Array.from(doc.querySelectorAll('a[href="' + link + '"]'));
         let modified = false;
         items.forEach(a => {
-            const card = a.closest('.group') || a.closest('.bg-white');
-            if(card) { card.remove(); modified = true; }
+            a.remove();
+            modified = true;
         });
         if(modified) {
             await updateFile(RepoConfig.TOOLS_SITES_FILE, serializeHtml(doc), `Delete Directory Item: ${link}`, sha);
@@ -920,21 +940,26 @@ export const updateCardInFile = async (filePath: string, fileName: string, data:
         const parser = new DOMParser();
         const doc = parser.parseFromString(content, 'text/html');
         
+        // Selector logic updated to match the new wrapping <a>
         const cards = Array.from(doc.querySelectorAll(`a[href="${fileName}"]`));
         let modified = false;
 
-        cards.forEach(link => {
-            const card = link.closest('.group') || link.closest('.bg-white') || link.closest('div'); 
+        cards.forEach(card => {
+            // The card IS the <a> tag now in new structure
             if (card) {
-                const titleEl = card.querySelector('h3 a, h3');
+                const titleEl = card.querySelector('h3');
                 const imgEl = card.querySelector('img');
                 const descEl = card.querySelector('p');
-                const catEl = card.querySelector('span.absolute');
+                const catEl = card.querySelector('.absolute.top-4'); // The category badge
                 
                 if (titleEl) titleEl.textContent = data.title;
                 if (imgEl) { imgEl.setAttribute('src', data.image); imgEl.setAttribute('alt', data.title); }
                 if (descEl) descEl.textContent = data.description;
-                if (catEl) catEl.textContent = data.category;
+                if (catEl) {
+                     catEl.textContent = data.category;
+                     // Update color if needed
+                     catEl.className = `absolute top-4 right-4 ${getCategoryColor(data.category)} text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg z-10 flex items-center gap-1`;
+                }
                 modified = true;
             }
         });
@@ -955,11 +980,9 @@ export const removeCardFromFile = async (filePath: string, fileName: string) => 
         let modified = false;
         
         links.forEach(link => {
-            const card = link.closest('.bg-white, .rounded-xl, .group');
-            if (card) {
-                card.remove();
-                modified = true;
-            }
+            // In the new structure, the <a> tag IS the container
+            link.remove();
+            modified = true;
         });
 
         if (modified) {
