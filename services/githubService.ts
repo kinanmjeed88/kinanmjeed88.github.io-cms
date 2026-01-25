@@ -394,7 +394,12 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
 export const getMetadata = async (): Promise<{ data: MetadataRoot; sha: string }> => {
   try {
     const { content, sha } = await getFile(RepoConfig.METADATA_FILE);
-    return { data: JSON.parse(content), sha };
+    const data = JSON.parse(content);
+    // Ensure articles array exists even if missing in JSON
+    if (!data.articles || !Array.isArray(data.articles)) {
+        data.articles = [];
+    }
+    return { data, sha };
   } catch (e) {
     return { data: { name: 'TechTouch', description: 'Tech News', articles: [] }, sha: '' };
   }
@@ -406,6 +411,9 @@ export const saveMetadata = async (data: any, sha?: string) => {
 
 export const getManagedArticles = async (): Promise<ArticleMetadata[]> => {
     const { data } = await getMetadata();
+    // Safety check just in case
+    if (!data.articles) return [];
+    
     return data.articles.map(a => ({
         fileName: a.file,
         title: a.title,
