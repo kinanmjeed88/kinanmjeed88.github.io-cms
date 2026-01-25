@@ -1,6 +1,7 @@
 import React, { Component, ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import './index.css';
 
 // 1. Polyfill process for browser compatibility (Fixes 'process is not defined' crashes)
 // @ts-ignore

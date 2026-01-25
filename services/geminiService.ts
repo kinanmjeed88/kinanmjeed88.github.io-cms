@@ -1,12 +1,27 @@
 import { GoogleGenAI } from "@google/genai";
 import { AIConfig, ArticleContent, DirectoryItem, AIAnalysisKnowledge } from "../types";
 
-// --- Provider Implementations ---
+// Helper for timeouts
+const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 15000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+};
 
 // 1. Gemini
 const callGemini = async (prompt: string, apiKey: string): Promise<string> => {
   if (!apiKey) throw new Error("Gemini API Key missing");
   const ai = new GoogleGenAI({ apiKey });
+  
+  // Note: SDK doesn't support signal directly, but we can wrap it.
+  // For simplicity, we assume SDK handles its own timeouts, but we wrap custom fetches below.
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash', 
     contents: prompt,
@@ -20,7 +35,7 @@ const callGemini = async (prompt: string, apiKey: string): Promise<string> => {
 // 2. Groq (OpenAI Compatible)
 const callGroq = async (prompt: string, apiKey: string): Promise<string> => {
   if (!apiKey) throw new Error("Groq API Key missing");
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const response = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -33,7 +48,7 @@ const callGroq = async (prompt: string, apiKey: string): Promise<string> => {
     })
   });
   
-  if (!response.ok) throw new Error(`Groq Error: ${response.statusText}`);
+  if (!response.ok) throw new Error(`Groq Error: ${response.status} ${response.statusText}`);
   const data = await response.json();
   return data.choices?.[0]?.message?.content || "";
 };
@@ -41,7 +56,7 @@ const callGroq = async (prompt: string, apiKey: string): Promise<string> => {
 // 3. Hugging Face (Inference API)
 const callHuggingFace = async (prompt: string, apiKey: string): Promise<string> => {
   if (!apiKey) throw new Error("Hugging Face API Key missing");
-  const response = await fetch("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2", {
+  const response = await fetchWithTimeout("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -53,7 +68,7 @@ const callHuggingFace = async (prompt: string, apiKey: string): Promise<string> 
     })
   });
 
-  if (!response.ok) throw new Error(`HF Error: ${response.statusText}`);
+  if (!response.ok) throw new Error(`HF Error: ${response.status} ${response.statusText}`);
   const data = await response.json();
   return Array.isArray(data) ? data[0]?.generated_text : data?.generated_text || "";
 };
@@ -124,9 +139,6 @@ const askAI = async (prompt: string): Promise<{ text: string, provider: string }
 
 // --- Public Methods ---
 
-/**
- * Smart detection of Ad Containers based on visual cues or text
- */
 export const detectAdSelectors = async (htmlContent: string): Promise<string[]> => {
     const prompt = `
     Analyze this HTML snippet.
@@ -155,9 +167,6 @@ export const detectAdSelectors = async (htmlContent: string): Promise<string[]> 
     }
 };
 
-/**
- * Extracts structured data from HTML using AI.
- */
 export const extractDataFromHtml = async (htmlContent: string, type: 'article' | 'directory_list' | 'about_page'): Promise<any> => {
     let schemaDescription = "";
     

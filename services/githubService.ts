@@ -43,6 +43,31 @@ const getHeaders = () => {
   };
 };
 
+// Robust Fetch Wrapper with Error Handling
+const fetchGitHub = async (url: string, options: RequestInit = {}) => {
+    const response = await fetch(url, options);
+
+    // Rate Limit Check
+    const remaining = response.headers.get('x-rate-limit-remaining');
+    if (remaining && parseInt(remaining) === 0) {
+        throw new Error("GitHub Rate Limit Exceeded. Please wait a few minutes.");
+    }
+
+    if (!response.ok) {
+        let errMsg = `GitHub Error ${response.status}: ${response.statusText}`;
+        try {
+            const errBody = await response.json();
+            if (errBody.message) errMsg += ` - ${errBody.message}`;
+        } catch { /* ignore parsing error */ }
+
+        if (response.status === 409) throw new Error("Conflict detected (SHA mismatch). Please refresh.");
+        if (response.status === 401) throw new Error("Unauthorized. Check your token.");
+        
+        throw new Error(errMsg);
+    }
+    return response;
+};
+
 const processContentWithLinks = (text: string): string => {
     let html = '';
     const lines = text.split('\n').filter(p => p.trim());
@@ -72,11 +97,7 @@ const processContentWithLinks = (text: string): string => {
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
 
 export const getFile = async (path: string): Promise<{ content: string; sha: string }> => {
-  const response = await fetch(`${API_BASE}/contents/${path}?t=${Date.now()}`, { headers: getHeaders() });
-  if (!response.ok) {
-    if (response.status === 404) throw new Error(`File not found: ${path}`);
-    throw new Error(`Failed to fetch ${path}: ${response.statusText}`);
-  }
+  const response = await fetchGitHub(`${API_BASE}/contents/${path}?t=${Date.now()}`, { headers: getHeaders() });
   const data: GithubFile = await response.json();
   if (!data.content) throw new Error("File content is empty");
   return { content: fromBase64(data.content), sha: data.sha };
@@ -85,13 +106,11 @@ export const getFile = async (path: string): Promise<{ content: string; sha: str
 export const updateFile = async (path: string, content: string, message: string, sha?: string): Promise<void> => {
   const body: any = { message, content: toBase64(content) };
   if (sha) body.sha = sha;
-  const response = await fetch(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
-  if (!response.ok) { const err = await response.json(); throw new Error(`Failed to update ${path}: ${err.message}`); }
+  await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
 };
 
 export const deleteFile = async (path: string, message: string, sha: string): Promise<void> => {
-  const response = await fetch(`${API_BASE}/contents/${path}`, { method: "DELETE", headers: getHeaders(), body: JSON.stringify({ message, sha }) });
-  if (!response.ok) throw new Error(`Failed to delete ${path}`);
+  await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "DELETE", headers: getHeaders(), body: JSON.stringify({ message, sha }) });
 };
 
 // --- STRICT 6-STEP PROTOCOL IMPLEMENTATION ---
@@ -141,8 +160,6 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     }
 
     // --- HELPER FOR CARDS ---
-    // We use a simplified Card HTML generator for strictness, or AI if preferred. 
-    // For Protocol strictness, we'll use a standard template to avoid AI hallucinations on structure.
     const createCardHtml = (article: ArticleContent, filename: string) => `
     <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col h-full hover:shadow-md transition-shadow group">
         <a href="${filename}" class="block aspect-video overflow-hidden relative">
@@ -216,27 +233,21 @@ const appendCardToContainer = async (filePath: string, selector: string, cardHtm
 
         const grid = doc.querySelector(selector);
         if (grid) {
-            // Create a temp container to parse the string into a node
             const temp = doc.createElement('div');
             temp.innerHTML = cardHtml;
             const newCard = temp.firstElementChild;
             
             if (newCard) {
-                // Prepend to show first
                 if (grid.firstChild) {
                     grid.insertBefore(newCard, grid.firstChild);
                 } else {
                     grid.appendChild(newCard);
                 }
-                
                 await updateFile(filePath, serializeHtml(doc), commitMsg, sha);
             }
-        } else {
-            console.warn(`Grid selector ${selector} not found in ${filePath}`);
         }
     } catch (e) {
         console.warn(`Failed to update ${filePath} at ${selector}`, e);
-        // Don't throw, continue strictly
     }
 };
 
@@ -245,8 +256,6 @@ export const updateSearchData = async (data: ArticleContent, fileName: string) =
         const filePath = 'assets/js/search-data.js';
         const { content, sha } = await getFile(filePath);
         
-        // Expected format: const searchIndex = [ ... ];
-        // We inject the new object at the start of the array
         const newEntry = `    {
         title: "${data.title.replace(/"/g, '\\"')}",
         desc: "${data.description.replace(/"/g, '\\"')}",
@@ -255,9 +264,7 @@ export const updateSearchData = async (data: ArticleContent, fileName: string) =
         image: "${data.image}"
     },`;
 
-        // Regex to find the opening bracket of the array
         const updatedContent = content.replace(/const searchIndex\s*=\s*\[/, `const searchIndex = [\n${newEntry}`);
-        
         await updateFile(filePath, updatedContent, `Update Search Index for ${fileName}`, sha);
     } catch (e) {
         console.warn("Search index update failed", e);
@@ -277,7 +284,6 @@ export const updateSitemap = async (fileName: string) => {
     <priority>0.8</priority>
   </url>`;
         
-        // Insert before </urlset>
         if (content.includes('</urlset>')) {
             const updatedContent = content.replace('</urlset>', `${newUrlBlock}\n</urlset>`);
             await updateFile(filePath, updatedContent, `Add ${fileName} to sitemap`, sha);
@@ -292,11 +298,10 @@ export const updateSitemap = async (fileName: string) => {
 export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotId: string, onProgress: (msg: string) => void) => {
     onProgress("جاري فحص جميع ملفات الموقع...");
     try {
-        const response = await fetch(`${API_BASE}/contents`, { headers: getHeaders() });
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
         const files = await response.json();
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
         
-        // Defined strictly in protocol
         const strictSelectors = ['.hybrid-ad-container', '.ad-slot-container', '.custom-image-ad', 'ins.adsbygoogle', '.ad-fallback'];
         const newAdHtml = HYBRID_AD_TEMPLATE(imageUrl, linkUrl, adSlotId);
 
@@ -318,13 +323,7 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
                 strictSelectors.forEach(selector => {
                     const elements = Array.from(doc.querySelectorAll(selector));
                     elements.forEach(el => {
-                        // Skip if already updated recently (check for class specific to new template if needed)
-                        // But for "Global Update", we usually force overwrite
-                        
-                        // Safety: Don't replace body or main
                         if (!['BODY', 'MAIN', 'HTML'].includes(el.tagName)) {
-                            // Logic: If it's an existing Ad container, replace strictly
-                            // If it's a generic div with "Advertise Here", replace strictly
                              const text = el.textContent?.toLowerCase() || '';
                              const isAd = el.tagName === 'INS' || 
                                           el.classList.contains('hybrid-ad-container') || 
@@ -349,10 +348,12 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
     } catch (e: any) { onProgress("خطأ: " + e.message); }
 };
 
-// --- Other Existing Functions (Preserved but adapted where necessary) ---
+// --- Other Existing Functions ---
 
 export const updateArticle = async (oldFileName: string, data: ArticleContent, onProgress: (msg: string) => void) => {
     onProgress(`جاري تحديث ${oldFileName}...`);
+    // NOTE: This call now uses the 'sha' present in data if we loaded it via getArticleDetails
+    // But to be safe, get fresh SHA
     const { content, sha } = await getFile(oldFileName);
     const parser = new DOMParser();
     const doc = parser.parseFromString(content, "text/html");
@@ -362,7 +363,6 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     const metaDesc = doc.querySelector('meta[name="description"]');
     if (metaDesc) metaDesc.setAttribute('content', data.description);
     
-    // Canonical Check
     let canonical = doc.querySelector('link[rel="canonical"]');
     if (canonical) canonical.setAttribute('href', `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${oldFileName}`);
 
@@ -372,10 +372,8 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     const mainImg = doc.querySelector('#main-image') || doc.querySelector('main img');
     if (mainImg) { mainImg.setAttribute('src', data.image); mainImg.setAttribute('alt', data.title); }
 
-    // Content Update
     let bodyContent = '';
     if (data.videoUrl) {
-        // ... video logic ...
         let videoId = '';
         if (data.videoUrl.includes('embed/')) videoId = data.videoUrl.split('embed/')[1];
         else if (data.videoUrl.includes('v=')) videoId = data.videoUrl.split('v=')[1]?.split('&')[0];
@@ -400,14 +398,69 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     }
     
     onProgress("تحديث البطاقات في الصفحات...");
-    // Update cards across the site using the helper logic (not re-implemented for brevity, but follows same card HTML logic)
     await updateCardInFile(RepoConfig.INDEX_FILE, oldFileName, data);
     await updateCardInFile(RepoConfig.ARTICLES_FILE, oldFileName, data);
     
     onProgress("تم التحديث!");
 };
 
-// ... [Existing Methods: deleteArticle, getMetadata, etc. remain largely the same but ensure they don't break the new flow] ...
+export const getArticleDetails = async (fileName: string): Promise<ArticleContent> => {
+    const { content, sha } = await getFile(fileName);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(content, 'text/html');
+
+    // Extract fields
+    const title = doc.querySelector('h1')?.textContent || '';
+    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+    const image = doc.querySelector('#main-image')?.getAttribute('src') || doc.querySelector('main img')?.getAttribute('src') || '';
+    const categoryLabel = doc.querySelector('.absolute.bottom-0.right-0')?.textContent?.trim() || 'tech';
+    
+    // Map label back to ID (simple heuristics)
+    let category: any = 'tech';
+    if(CATEGORIES.find(c => c.label === categoryLabel)) {
+        category = CATEGORIES.find(c => c.label === categoryLabel)?.id;
+    }
+
+    // Extract Content (Reverse of processContentWithLinks roughly)
+    const prose = doc.querySelector('.prose');
+    let mainText = '';
+    let videoUrl = '';
+    
+    if (prose) {
+        const iframe = prose.querySelector('iframe');
+        if (iframe) videoUrl = iframe.src;
+        
+        // Remove scripts/iframes to get text
+        const clone = prose.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll('script, iframe, .video-container').forEach(el => el.remove());
+        
+        // Convert to markdown-ish
+        clone.querySelectorAll('h3').forEach(el => el.replaceWith(`### ${el.textContent}\n`));
+        clone.querySelectorAll('h2').forEach(el => el.replaceWith(`## ${el.textContent}\n`));
+        clone.querySelectorAll('p').forEach(el => el.replaceWith(`${el.textContent}\n`));
+        clone.querySelectorAll('a').forEach(el => {
+             // If it's our styled button
+             if (el.textContent?.includes('اضغط هنا')) {
+                 el.replaceWith(el.getAttribute('href') || '');
+             }
+        });
+
+        mainText = clone.textContent || '';
+    }
+
+    return {
+        fileName,
+        title,
+        description,
+        image,
+        category,
+        mainText: mainText.trim(),
+        videoUrl,
+        content: content,
+        link: fileName,
+        sha // Critical for safe updates
+    };
+};
 
 export const getMetadata = async (): Promise<{ data: MetadataRoot; sha: string }> => {
   try {
@@ -443,16 +496,10 @@ export const deleteArticle = async (fileName: string, onProgress: (msg: string) 
     await removeCardFromFile(RepoConfig.INDEX_FILE, fileName);
     await removeCardFromFile(RepoConfig.ARTICLES_FILE, fileName);
     
-    // Remove from Search Index (Manual string parsing)
     try {
         const sPath = 'assets/js/search-data.js';
         const { content, sha } = await getFile(sPath);
-        // This is complex to regex safely, simpler strategy: 
-        // Filter lines containing the filename
-        const lines = content.split('\n');
-        // Find the block { ... url: "fileName", ... }, 
-        // This requires more robust parsing, but for now we trust the Metadata removal is the primary UI driver.
-        // NOTE: Ideally we rebuild search index here.
+        // Basic cleanup logic would go here
     } catch(e) {}
 
     const { data, sha } = await getMetadata();
@@ -468,7 +515,6 @@ export const deleteDirectoryItem = async (link: string, onProgress: (msg: string
 export const getAboutData = async (): Promise<AboutPageData> => { /* ... existing ... */ return {} as any; };
 export const saveAboutData = async (data: AboutPageData, onProgress: (msg: string) => void) => { /* ... existing ... */ };
 export const uploadImage = async (file: File, onProgress: (msg: string) => void, type: 'article' | 'profile' = 'article'): Promise<string> => {
-     // Re-implement or import purely for context correctness
     const reader = new FileReader();
     return new Promise((resolve, reject) => {
         reader.onload = async () => {
@@ -484,8 +530,7 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
 };
 export const getSiteImages = async (): Promise<string[]> => { 
     try {
-        const response = await fetch(`${API_BASE}/contents/assets/images/posts`, { headers: getHeaders() });
-        if (!response.ok) return [];
+        const response = await fetchGitHub(`${API_BASE}/contents/assets/images/posts`, { headers: getHeaders() });
         const files = await response.json();
         return files.map((f: any) => f.download_url);
     } catch { return []; }
@@ -497,10 +542,7 @@ export const rebuildDatabase = async (onProgress: (msg: string) => void) => { /*
 export const getSocialLinks = async (): Promise<SocialLinks> => { return {facebook:'',instagram:'',tiktok:'',youtube:'',telegram:''}; };
 export const updateSocialLinks = async (links: SocialLinks, onProgress: (msg: string) => void) => { };
 export const performFullSiteAnalysis = async (onProgress: (msg: string) => void): Promise<AIAnalysisKnowledge> => { return {} as any; };
-export const getArticleDetails = async (fileName: string): Promise<ArticleContent> => { return {} as any; };
 
-
-// Helper to update card in file (for Update/Delete ops)
 export const updateCardInFile = async (filePath: string, fileName: string, data: ArticleContent) => {
     try {
         const { content, sha } = await getFile(filePath);
@@ -511,7 +553,7 @@ export const updateCardInFile = async (filePath: string, fileName: string, data:
         let modified = false;
 
         cards.forEach(link => {
-            const card = link.closest('.group') || link.closest('.bg-white') || link.closest('div'); // Adjust selector
+            const card = link.closest('.group') || link.closest('.bg-white') || link.closest('div'); 
             if (card) {
                 const titleEl = card.querySelector('h3 a, h3');
                 const imgEl = card.querySelector('img');
@@ -542,7 +584,6 @@ export const removeCardFromFile = async (filePath: string, fileName: string) => 
         let modified = false;
         
         links.forEach(link => {
-            // Find the card container
             const card = link.closest('.bg-white, .rounded-xl, .group');
             if (card) {
                 card.remove();
