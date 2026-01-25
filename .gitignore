@@ -1,0 +1,6 @@
+node_modules
+dist
+.DS_Store
+.env
+# docs folder is now required for production
+# docs 
