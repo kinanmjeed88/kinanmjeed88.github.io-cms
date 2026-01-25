@@ -7,9 +7,7 @@ export default defineConfig({
   // This base URL allows the app to run in a subdirectory (repo name)
   base: '/Kinan-touch-AD-google/',
   build: {
-    // Output to 'docs' folder instead of 'dist'
-    // This allows using "Source: /docs" in GitHub Pages settings without a workflow
-    outDir: 'docs',
+    outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
     emptyOutDir: true

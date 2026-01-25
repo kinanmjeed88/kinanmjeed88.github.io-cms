@@ -21,7 +21,8 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
     description: '',
     link: '',
     mainText: '',
-    videoUrl: ''
+    videoUrl: '',
+    content: ''
   });
   
   const [loading, setLoading] = useState(false);
