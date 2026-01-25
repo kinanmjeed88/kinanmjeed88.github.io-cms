@@ -27,19 +27,10 @@ export interface ArticleEntry {
   file: string; // .html
 }
 
-export interface AIAnalysisKnowledge {
-  lastAnalyzed: string;
-  cardStructure: string; // Description of HTML structure for cards
-  directoryStructure: string; // Description for directory items
-  gridClasses: string; // CSS classes used for grids
-  colorsDetected: string[];
-}
-
 export interface MetadataRoot {
   name: string;
   description: string;
   articles: ArticleEntry[];
-  aiKnowledge?: AIAnalysisKnowledge; // Stored analysis result
   [key: string]: any;
 }
 

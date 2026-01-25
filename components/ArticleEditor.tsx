@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { createArticle, updateArticle, getArticleDetails } from '../services/githubService';
-import { generateArticleContent } from '../services/geminiService';
 import { ArticleContent } from '../types';
 import { Input } from './ui/Input';
 import { CATEGORIES } from '../constants';
-import { ArrowLeft, Loader2, Sparkles, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Save } from 'lucide-react';
 import { ImagePicker } from './ImagePicker';
 
 interface Props {
@@ -26,7 +25,6 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
   });
   
   const [loading, setLoading] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
   const [status, setStatus] = useState('');
 
   useEffect(() => {
@@ -36,9 +34,8 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
   }, [editFileName]);
 
   const loadArticle = async (fileName: string) => {
-    setStatus(`جاري تحميل وتحليل ${fileName} باستخدام الذكاء الاصطناعي...`);
+    setStatus(`جاري تحميل ${fileName}...`);
     try {
-      // Uses the new service function which tries AI first
       const articleData = await getArticleDetails(fileName);
       setFormData(articleData);
       setStatus('');
@@ -67,20 +64,6 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
     } catch (err: any) {
       setStatus("خطأ: " + err.message);
       setLoading(false);
-    }
-  };
-
-  const handleAiGenerate = async () => {
-    if (!formData.title) {
-      alert("يرجى إدخال العنوان أولاً.");
-      return;
-    }
-    setAiLoading(true);
-    try {
-      const content = await generateArticleContent(formData.title, formData.category);
-      setFormData(prev => ({ ...prev, mainText: content }));
-    } finally {
-      setAiLoading(false);
     }
   };
 
@@ -159,22 +142,13 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
 
         <div className="relative">
           <div className="flex justify-between items-center mb-1">
-             <label className="block text-sm font-medium text-gray-400">المحتوى الرئيسي</label>
-             <button
-               type="button"
-               onClick={handleAiGenerate}
-               disabled={aiLoading}
-               className="text-xs bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full flex items-center gap-1 hover:opacity-90 disabled:opacity-50"
-             >
-               {aiLoading ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
-               توليد بالذكاء الاصطناعي
-             </button>
+             <label className="block text-sm font-medium text-gray-400">المحتوى الرئيسي (Markdown Supported: # للعنوان)</label>
           </div>
           <textarea
             className="w-full bg-slate-900 border border-slate-700 rounded p-4 text-white focus:ring-2 focus:ring-primary focus:outline-none min-h-[300px] leading-relaxed"
             value={formData.mainText}
             onChange={e => setFormData({...formData, mainText: e.target.value})}
-            placeholder="اكتب محتوى المقال هنا..."
+            placeholder="اكتب محتوى المقال هنا... استخدم ### للعناوين الفرعية"
             required
           />
         </div>

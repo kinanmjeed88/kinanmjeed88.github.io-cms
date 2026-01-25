@@ -1,26 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { updateSiteAvatar, rebuildDatabase, updateSocialLinks, getSocialLinks, performFullSiteAnalysis, getMetadata } from '../services/githubService';
-import { Input, TextArea } from './ui/Input';
-import { Loader2, Save, UserCircle, Database, RefreshCw, CheckCircle, AlertTriangle, Share2, Bot, BrainCircuit, Activity } from 'lucide-react';
+import { updateSiteAvatar, updateSocialLinks, getSocialLinks } from '../services/githubService';
+import { Input } from './ui/Input';
+import { Loader2, UserCircle, Share2 } from 'lucide-react';
 import { ImagePicker } from './ImagePicker';
-import { AIConfig, AIAnalysisKnowledge } from '../types';
 
 export const Settings: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'general' | 'ai' | 'social'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'social'>('general');
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
   // General State
   const [avatarUrl, setAvatarUrl] = useState('');
-  const [rebuildStatus, setRebuildStatus] = useState('');
-  const [rebuilding, setRebuilding] = useState(false);
-
-  // AI State
-  const [aiConfig, setAiConfig] = useState<AIConfig>({
-      geminiKey: '', groqKey: '', huggingFaceKey: '', preferredProvider: 'gemini'
-  });
-  const [aiKnowledge, setAiKnowledge] = useState<AIAnalysisKnowledge | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
 
   // Social State
   const [socialLinks, setSocialLinks] = useState({
@@ -32,38 +22,8 @@ export const Settings: React.FC = () => {
   }, []);
 
   const loadSettings = async () => {
-      // Load AI Config from LocalStorage
-      const storedAi = localStorage.getItem('techTouch_ai_config');
-      if (storedAi) setAiConfig(JSON.parse(storedAi));
-
-      // Load Socials & Metadata
       const links = await getSocialLinks();
       setSocialLinks(links);
-
-      try {
-          const { data } = await getMetadata();
-          if (data.aiKnowledge) setAiKnowledge(data.aiKnowledge);
-      } catch (e) { console.log("No metadata yet"); }
-  };
-
-  const handleAiConfigSave = () => {
-      localStorage.setItem('techTouch_ai_config', JSON.stringify(aiConfig));
-      setStatus("تم حفظ إعدادات الذكاء الاصطناعي في المتصفح بنجاح.");
-      setTimeout(() => setStatus(''), 3000);
-  };
-
-  const handleAnalyzeSite = async () => {
-      setAnalyzing(true);
-      setStatus("جاري قراءة ملفات الموقع وتحليلها...");
-      try {
-          const knowledge = await performFullSiteAnalysis((msg) => setStatus(msg));
-          setAiKnowledge(knowledge);
-          setStatus("تم التحليل وتحديث قاعدة المعرفة بنجاح!");
-      } catch (e: any) {
-          setStatus("فشل التحليل: " + e.message);
-      } finally {
-          setAnalyzing(false);
-      }
   };
 
   const handleAvatarUpdate = async () => {
@@ -77,20 +37,6 @@ export const Settings: React.FC = () => {
       setStatus('خطأ: ' + e.message);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleRebuild = async () => {
-    if (!window.confirm("هل أنت متأكد؟ سيقوم هذا الإجراء بإعادة بناء metadata.json.")) return;
-    setRebuilding(true);
-    setRebuildStatus('جاري فحص الملفات...');
-    try {
-        await rebuildDatabase((msg) => setRebuildStatus(msg));
-        setRebuildStatus('تمت العملية بنجاح!');
-    } catch (e: any) {
-        setRebuildStatus('فشلت العملية: ' + e.message);
-    } finally {
-        setRebuilding(false);
     }
   };
 
@@ -118,12 +64,6 @@ export const Settings: React.FC = () => {
               <UserCircle className="w-4 h-4" /> عام
           </button>
           <button 
-            onClick={() => setActiveTab('ai')}
-            className={`px-4 py-2 rounded font-medium flex items-center gap-2 transition-colors ${activeTab === 'ai' ? 'bg-primary text-white' : 'text-gray-400 hover:text-white'}`}
-          >
-              <BrainCircuit className="w-4 h-4" /> الذكاء الاصطناعي
-          </button>
-          <button 
             onClick={() => setActiveTab('social')}
             className={`px-4 py-2 rounded font-medium flex items-center gap-2 transition-colors ${activeTab === 'social' ? 'bg-primary text-white' : 'text-gray-400 hover:text-white'}`}
           >
@@ -140,12 +80,13 @@ export const Settings: React.FC = () => {
         {activeTab === 'general' && (
             <div className="space-y-8 animate-in fade-in">
                 <div>
-                    <h3 className="text-lg font-bold text-white mb-4">الملف الشخصي</h3>
+                    <h3 className="text-lg font-bold text-white mb-4">الملف الشخصي (Profile Picture)</h3>
+                    <p className="text-gray-400 text-xs mb-2">سيتم تحديث الصورة الشخصية في جميع ملفات HTML.</p>
                     <Input 
                         label="رابط الصورة الشخصية الجديدة" 
                         value={avatarUrl} 
                         onChange={e => setAvatarUrl(e.target.value)} 
-                        placeholder="https://..." 
+                        placeholder="https://... (يفضل me.jpg)" 
                     />
                     <div className="flex justify-end -mt-2 mb-4">
                         <ImagePicker onSelect={(url) => setAvatarUrl(url)} type="profile" />
@@ -153,130 +94,6 @@ export const Settings: React.FC = () => {
                     <button onClick={handleAvatarUpdate} disabled={loading} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded text-sm">
                         {loading ? <Loader2 className="animate-spin inline w-4 h-4"/> : 'تحديث الصورة'}
                     </button>
-                </div>
-
-                <div className="border-t border-slate-700 pt-6">
-                    <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                        <Database className="w-5 h-5 text-orange-400" /> صيانة قاعدة البيانات
-                    </h3>
-                    <p className="text-gray-400 text-sm mb-4">إصلاح ملف metadata.json في حال عدم تطابقه مع الملفات.</p>
-                    <div className="flex items-center gap-4">
-                        <button onClick={handleRebuild} disabled={rebuilding} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded text-sm">
-                            {rebuilding ? 'جاري الفحص...' : 'إصلاح البيانات'}
-                        </button>
-                        <span className="text-xs text-gray-500">{rebuildStatus}</span>
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {/* --- AI CONFIG TAB --- */}
-        {activeTab === 'ai' && (
-            <div className="space-y-8 animate-in fade-in">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Keys Configuration */}
-                    <div className="space-y-4">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                            <Bot className="w-5 h-5 text-accent" /> مزودو الخدمة
-                        </h3>
-                        <p className="text-xs text-gray-400">سيتم استخدام المزود المفضل أولاً، وفي حال الفشل سينتقل للنظام التالي.</p>
-                        
-                        <div className="space-y-3">
-                            <div className="p-3 bg-slate-900 rounded border border-slate-600">
-                                <label className="flex items-center justify-between text-sm font-bold text-blue-400 mb-2">
-                                    <span>Google Gemini (الأسرع)</span>
-                                    <input type="radio" name="pref" checked={aiConfig.preferredProvider === 'gemini'} onChange={() => setAiConfig({...aiConfig, preferredProvider: 'gemini'})} />
-                                </label>
-                                <input 
-                                    type="password" 
-                                    value={aiConfig.geminiKey}
-                                    onChange={e => setAiConfig({...aiConfig, geminiKey: e.target.value})}
-                                    placeholder="API Key..."
-                                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white"
-                                />
-                            </div>
-
-                            <div className="p-3 bg-slate-900 rounded border border-slate-600">
-                                <label className="flex items-center justify-between text-sm font-bold text-orange-400 mb-2">
-                                    <span>Groq (Llama 3 - دقيق)</span>
-                                    <input type="radio" name="pref" checked={aiConfig.preferredProvider === 'groq'} onChange={() => setAiConfig({...aiConfig, preferredProvider: 'groq'})} />
-                                </label>
-                                <input 
-                                    type="password" 
-                                    value={aiConfig.groqKey}
-                                    onChange={e => setAiConfig({...aiConfig, groqKey: e.target.value})}
-                                    placeholder="gsk_..."
-                                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white"
-                                />
-                            </div>
-
-                            <div className="p-3 bg-slate-900 rounded border border-slate-600">
-                                <label className="flex items-center justify-between text-sm font-bold text-yellow-400 mb-2">
-                                    <span>Hugging Face (احتياطي)</span>
-                                    <input type="radio" name="pref" checked={aiConfig.preferredProvider === 'huggingface'} onChange={() => setAiConfig({...aiConfig, preferredProvider: 'huggingface'})} />
-                                </label>
-                                <input 
-                                    type="password" 
-                                    value={aiConfig.huggingFaceKey}
-                                    onChange={e => setAiConfig({...aiConfig, huggingFaceKey: e.target.value})}
-                                    placeholder="hf_..."
-                                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm text-white"
-                                />
-                            </div>
-                        </div>
-                        
-                        <button onClick={handleAiConfigSave} className="w-full bg-primary hover:bg-blue-600 text-white py-2 rounded font-bold transition-colors">
-                            حفظ المفاتيح
-                        </button>
-                    </div>
-
-                    {/* AI Knowledge Display */}
-                    <div className="bg-slate-900 rounded-xl border border-slate-700 p-4 flex flex-col h-full">
-                        <div className="flex justify-between items-start mb-4">
-                            <div>
-                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                    <Activity className="w-5 h-5 text-green-400" /> تحليل الموقع
-                                </h3>
-                                <p className="text-xs text-gray-400 mt-1">
-                                    ماذا يعرف الذكاء الاصطناعي عن هيكل موقعك؟
-                                </p>
-                            </div>
-                            <button 
-                                onClick={handleAnalyzeSite} 
-                                disabled={analyzing}
-                                className="bg-slate-700 hover:bg-slate-600 text-xs px-3 py-1.5 rounded text-white flex items-center gap-1"
-                            >
-                                {analyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
-                                تحليل الآن
-                            </button>
-                        </div>
-
-                        <div className="flex-1 bg-black/50 rounded p-3 overflow-y-auto text-xs font-mono text-gray-300 border border-slate-800">
-                            {aiKnowledge ? (
-                                <div className="space-y-4">
-                                    <div>
-                                        <span className="text-blue-400 block mb-1">// آخر تحديث: {new Date(aiKnowledge.lastAnalyzed).toLocaleString('ar')}</span>
-                                    </div>
-                                    <div>
-                                        <span className="text-accent block mb-1"># نمط البطاقات (Articles):</span>
-                                        <p className="whitespace-pre-wrap">{aiKnowledge.cardStructure}</p>
-                                    </div>
-                                    <div>
-                                        <span className="text-accent block mb-1"># نمط الدليل (Directory):</span>
-                                        <p className="whitespace-pre-wrap">{aiKnowledge.directoryStructure}</p>
-                                    </div>
-                                    <div>
-                                        <span className="text-accent block mb-1"># الألوان المكتشفة:</span>
-                                        <p>[{aiKnowledge.colorsDetected?.join(', ') || 'N/A'}]</p>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="h-full flex items-center justify-center text-gray-600">
-                                    لم يتم إجراء تحليل للموقع بعد. اضغط على "تحليل الآن".
-                                </div>
-                            )}
-                        </div>
-                    </div>
                 </div>
             </div>
         )}
