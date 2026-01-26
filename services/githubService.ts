@@ -198,7 +198,9 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
 
     // 3. Wrapped Link (Button)
     if (data.downloadLink) {
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا');
+        // Enforce "اضغط هنا" if text is not provided or generic
+        const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
     }
 
     const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
@@ -306,6 +308,7 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     
     doc.querySelector('meta[name="description"]')?.setAttribute('content', data.description);
     
+    // Update main image in article
     const img = doc.querySelector('#main-image') || doc.querySelector('main img');
     if (img) img.setAttribute('src', data.image);
 
@@ -336,7 +339,8 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     });
 
     if (data.downloadLink) {
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا');
+         const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
     }
 
     const prose = doc.querySelector('.prose');
