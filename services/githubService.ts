@@ -1,5 +1,5 @@
 import { ArticleContent, ArticleMetadata, GithubFile, RepoConfig, TickerData, MetadataRoot, ArticleEntry, DirectoryItem, SocialLinks, AboutPageData } from '../types';
-import { HYBRID_AD_TEMPLATE, BASE_ARTICLE_TEMPLATE, CATEGORIES, ARTICLE_CARD_TEMPLATE, DIRECTORY_ITEM_TEMPLATE } from '../constants';
+import { HYBRID_AD_TEMPLATE, BASE_ARTICLE_TEMPLATE, CATEGORIES, ARTICLE_CARD_TEMPLATE, DIRECTORY_ITEM_TEMPLATE, DOWNLOAD_BUTTON_TEMPLATE } from '../constants';
 
 let GITHUB_TOKEN: string | null = null;
 
@@ -56,6 +56,14 @@ const fetchGitHub = async (url: string, options: RequestInit = {}) => {
 };
 
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
+
+// Helper to extract YouTube ID from various URL formats
+const getYouTubeId = (url: string): string | null => {
+    if (!url) return null;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+};
 
 export const getFile = async (path: string): Promise<{ content: string; sha: string }> => {
   const response = await fetchGitHub(`${API_BASE}/contents/${path}?t=${Date.now()}`, { headers: getHeaders() });
@@ -161,13 +169,20 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     
     let bodyContent = '';
     
-    // 1. Video (Step 2.c from Guide)
+    // 1. Video (Embedded Iframe)
     if (data.videoUrl) {
-        let videoId = data.videoUrl.split('v=')[1]?.split('&')[0] || data.videoUrl.split('/').pop() || '';
+        const videoId = getYouTubeId(data.videoUrl);
         if (videoId) {
             bodyContent += `
-<div class="video-container my-8">
-    <iframe src="https://www.youtube.com/embed/${videoId}" title="${data.title}" allowfullscreen></iframe>
+<div class="video-container my-8 relative w-full aspect-video rounded-xl overflow-hidden shadow-lg">
+    <iframe 
+        src="https://www.youtube.com/embed/${videoId}" 
+        title="${data.title}" 
+        class="absolute inset-0 w-full h-full"
+        frameborder="0" 
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+        allowfullscreen>
+    </iframe>
 </div>\n`;
         }
     }
@@ -180,16 +195,9 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
         else bodyContent += `<p>${line}</p>`;
     });
 
-    // 3. Wrapped Link (Step 2.d from Guide)
+    // 3. Wrapped Link (Button)
     if (data.downloadLink) {
-        bodyContent += `
-<div class="my-8 flex justify-center">
-    <a href="${data.downloadLink}" target="_blank" class="btn-wrapped-link">
-        <!-- أيقونة التحميل أو الرابط -->
-        <i data-lucide="download"></i>
-        <span>${data.downloadText || 'اضغط هنا ..'}</span>
-    </a>
-</div>\n`;
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا للتحميل');
     }
 
     const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
@@ -302,9 +310,19 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     let bodyContent = '';
     // Reconstruct body with video/link options if present
     if (data.videoUrl) {
-        let videoId = data.videoUrl.split('v=')[1]?.split('&')[0] || data.videoUrl.split('/').pop() || '';
+        const videoId = getYouTubeId(data.videoUrl);
         if (videoId) {
-            bodyContent += `<div class="video-container my-8"><iframe src="https://www.youtube.com/embed/${videoId}" title="${data.title}" allowfullscreen></iframe></div>\n`;
+            bodyContent += `
+<div class="video-container my-8 relative w-full aspect-video rounded-xl overflow-hidden shadow-lg">
+    <iframe 
+        src="https://www.youtube.com/embed/${videoId}" 
+        title="${data.title}" 
+        class="absolute inset-0 w-full h-full"
+        frameborder="0" 
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+        allowfullscreen>
+    </iframe>
+</div>\n`;
         }
     }
 
@@ -316,13 +334,7 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     });
 
     if (data.downloadLink) {
-        bodyContent += `
-<div class="my-8 flex justify-center">
-    <a href="${data.downloadLink}" target="_blank" class="btn-wrapped-link">
-        <i data-lucide="download"></i>
-        <span>${data.downloadText || 'اضغط هنا ..'}</span>
-    </a>
-</div>\n`;
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا للتحميل');
     }
 
     const prose = doc.querySelector('.prose');
@@ -753,7 +765,11 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
         reader.onload = async () => {
             try {
                 const content = (reader.result as string).split(',')[1];
-                const filename = type === 'profile' ? 'me.jpg' : `img_${Date.now()}.jpg`;
+                // Unique Filename Generation: timestamp + random string
+                const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                const ext = file.name.split('.').pop() || 'jpg';
+                const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
+                
                 const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
                 
                 let sha;
@@ -826,14 +842,15 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
     let videoUrl = '';
     if (videoFrame) {
         const src = videoFrame.getAttribute('src') || '';
+        // Reconstruct common URL
         if (src.includes('/embed/')) {
             const id = src.split('/embed/')[1].split('?')[0];
             videoUrl = `https://www.youtube.com/watch?v=${id}`;
         }
     }
 
-    // Extract Wrapped Link
-    const btnLink = doc.querySelector('a.btn-wrapped-link');
+    // Extract Wrapped Link (Button)
+    const btnLink = doc.querySelector('.btn-wrapped-link');
     let downloadLink = '';
     let downloadText = '';
     if (btnLink) {

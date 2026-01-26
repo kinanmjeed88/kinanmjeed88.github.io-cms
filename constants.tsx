@@ -30,6 +30,17 @@ export const HYBRID_AD_TEMPLATE = (imageUrl: string, linkUrl: string, slotId: st
     </a>
 </div>`;
 
+// Template for Download/External Link Button
+export const DOWNLOAD_BUTTON_TEMPLATE = (url: string, text: string) => `
+<div class="my-10 flex justify-center">
+    <a href="${url}" target="_blank" class="btn-wrapped-link group relative inline-flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-bold text-lg transition-all shadow-lg hover:shadow-blue-500/40 hover:-translate-y-1 overflow-hidden">
+        <div class="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-download animate-bounce"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+        <span>${text}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-left opacity-0 group-hover:opacity-100 transition-opacity -ml-2 group-hover:ml-0"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+    </a>
+</div>`;
+
 // Template from Guide Section 2 (Article Card)
 export const ARTICLE_CARD_TEMPLATE = (article: {filename: string, image: string, category: string, title: string, description: string}) => `
     <a href="${article.filename}" class="group h-full">
