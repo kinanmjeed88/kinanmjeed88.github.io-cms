@@ -325,27 +325,53 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
     try {
         const { content } = await getFile(RepoConfig.TOOLS_SITES_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const cards = Array.from(doc.querySelectorAll('.grid > a'));
-        return cards.map(card => {
-            const colorDiv = card.querySelector('.w-10.h-10');
-            const colorClass = colorDiv ? Array.from(colorDiv.classList).find(c => c.startsWith('bg-') && !c.includes('white')) || 'bg-blue-600' : 'bg-blue-600';
-            return {
-                title: card.querySelector('h3')?.textContent?.trim() || 'No Title',
-                description: card.querySelector('.marquee-text-content')?.textContent?.trim() || '',
-                link: card.getAttribute('href') || '#',
-                icon: card.querySelector('i')?.getAttribute('data-lucide') || 'globe',
-                colorClass: colorClass
-            };
-        });
+        
+        // Strategy 1: Look for anchors with the specific marquee class used in the template
+        const cards = Array.from(doc.querySelectorAll('.marquee-text-content')).map(el => el.closest('a')).filter(Boolean) as HTMLAnchorElement[];
+        
+        if (cards.length === 0) {
+             // Fallback Strategy 2: Look for immediate children of grid if standard class not found
+             const gridCards = Array.from(doc.querySelectorAll('.grid > a'));
+             return gridCards.map(card => parseCard(card));
+        }
+
+        return cards.map(card => parseCard(card));
     } catch { return []; }
 };
+
+function parseCard(card: Element): DirectoryItem {
+    // Attempt to find the colored icon container
+    const colorDiv = card.querySelector('div[class*="w-10"]'); 
+    let colorClass = 'bg-blue-600';
+    
+    if (colorDiv) {
+        // Find class starting with bg- excluding bg-white/slate/gray-50
+        const cls = Array.from(colorDiv.classList).find(c => c.startsWith('bg-') && !c.includes('white') && !c.includes('slate') && !c.includes('gray-5'));
+        if (cls) colorClass = cls;
+    }
+    
+    return {
+        title: card.querySelector('h3')?.textContent?.trim() || 'No Title',
+        description: card.querySelector('.marquee-text-content')?.textContent?.trim() || card.querySelector('p')?.textContent?.trim() || '',
+        link: card.getAttribute('href') || '#',
+        icon: card.querySelector('i')?.getAttribute('data-lucide') || 'globe',
+        colorClass: colorClass
+    };
+}
 
 export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: string) => void) => {
      onProgress("جاري إضافة البطاقة...");
      try {
          const { content, sha } = await getFile(RepoConfig.TOOLS_SITES_FILE);
          const doc = new DOMParser().parseFromString(content, 'text/html');
-         const grid = doc.querySelector('.grid');
+         
+         let grid = doc.querySelector('.grid');
+         // If .grid class not found, try to find the container of existing items
+         if(!grid) {
+             const existingItem = doc.querySelector('.marquee-text-content')?.closest('a')?.parentElement;
+             if (existingItem) grid = existingItem;
+         }
+
          if(grid) {
              const temp = doc.createElement('div');
              temp.innerHTML = DIRECTORY_ITEM_TEMPLATE(item);
@@ -353,12 +379,23 @@ export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: s
              
              if (newEl) {
                  const existing = doc.querySelector(`a[href="${item.link}"]`);
-                 if (existing) existing.replaceWith(newEl);
-                 else grid.appendChild(newEl);
+                 if (existing) {
+                     existing.replaceWith(newEl);
+                 } else {
+                     // Check if there's a "Folder" item (special item), insert before it
+                     const folderItem = grid.querySelector('a[href*="t.me/addlist"]');
+                     if (folderItem) {
+                         grid.insertBefore(newEl, folderItem);
+                     } else {
+                         grid.appendChild(newEl);
+                     }
+                 }
                  
                  await updateFile(RepoConfig.TOOLS_SITES_FILE, serializeHtml(doc), `Add Directory Item: ${item.title}`, sha);
                  onProgress("تم الحفظ!");
              }
+         } else {
+             throw new Error("لم يتم العثور على شبكة العرض (Grid) في الملف.");
          }
      } catch(e: any) {
          throw new Error("Failed: " + e.message);
@@ -404,7 +441,7 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         
         let updatedCount = 0;
         
-        // Ensure imageUrl is valid (not empty, not undefined string, not 'undefined')
+        // Ensure imageUrl is valid (not empty, not undefined string)
         const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
         
         const newAdHtml = validCustomImage
@@ -637,14 +674,20 @@ export const parseTicker = async (): Promise<TickerData> => {
         const { content } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
         
-        // Use getElementsByTagName to catch all marquees, not just the first one if there are multiple sections
-        const marquees = doc.getElementsByTagName('marquee');
-        if (marquees.length > 0) {
-            const marquee = marquees[0];
-            const anchor = marquee.querySelector('a');
+        let container = doc.querySelector('marquee');
+        if (!container) container = doc.querySelector('.animate-marquee');
+
+        if (container) {
+            const anchor = container.querySelector('a');
+            if (anchor) {
+                return { 
+                    text: anchor.textContent?.trim() || '', 
+                    link: anchor.getAttribute('href') || '#' 
+                };
+            }
             return { 
-                text: anchor?.textContent?.trim() || marquee.textContent?.trim() || '', 
-                link: anchor?.getAttribute('href') || '#' 
+                text: container.textContent?.trim() || '', 
+                link: '#' 
             };
         }
         return { text: '', link: '' };
@@ -656,17 +699,21 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
     try {
         const { content, sha } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const marquees = doc.getElementsByTagName('marquee');
         
-        if (marquees.length > 0) {
-            const marquee = marquees[0];
-            marquee.innerHTML = ''; // Clear previous content
+        let container = doc.querySelector('marquee');
+        if (!container) container = doc.querySelector('.animate-marquee');
+        
+        if (container) {
+            container.innerHTML = ''; // Clear previous content (spans/text)
+            
             const a = doc.createElement('a');
             a.href = link;
             a.textContent = text;
-            a.style.color = 'inherit';
-            a.style.textDecoration = 'none';
-            marquee.appendChild(a);
+            a.className = "text-white hover:text-blue-300 transition-colors mx-4 font-medium flex items-center"; 
+            a.style.color = "inherit";
+            a.style.textDecoration = "none";
+            
+            container.appendChild(a);
         }
         
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(doc), "Update Ticker", sha);
@@ -719,9 +766,7 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
 
         // Cache busting: Append timestamp
-        // We assume the user has already uploaded 'me.jpg' to assets/images/me.jpg via uploadImage('profile')
-        // We want to point all profile images to this new path with a timestamp.
-        const cleanUrl = url.includes('?') ? url.split('?')[0] : url; 
+        const cleanUrl = url.split('?')[0]; 
         const newSrc = `${cleanUrl}?v=${Date.now()}`;
 
         for (const file of htmlFiles) {
@@ -733,12 +778,14 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
+                    const alt = img.getAttribute('alt') || '';
                     // Improved Selector for Profile Picture
                     if (
                         src.includes('me.jpg') || 
                         src.includes('profile') || 
                         img.classList.contains('rounded-full') || 
-                        (img.alt && img.alt.toLowerCase().includes('profile'))
+                        (alt && alt.toLowerCase().includes('profile')) ||
+                        (alt && alt.includes('كنان'))
                     ) {
                         img.setAttribute('src', newSrc);
                         modified = true;
