@@ -72,8 +72,9 @@ export const getFile = async (path: string): Promise<{ content: string; sha: str
   return { content: fromBase64(data.content), sha: data.sha };
 };
 
-export const updateFile = async (path: string, content: string, message: string, sha?: string): Promise<void> => {
-  const body: any = { message, content: toBase64(content) };
+export const updateFile = async (path: string, content: string, message: string, sha?: string, isBase64: boolean = false): Promise<void> => {
+  // If isBase64 is true, we use content as is. Otherwise we encode it.
+  const body: any = { message, content: isBase64 ? content : toBase64(content) };
   if (sha) body.sha = sha;
   await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
 };
@@ -197,7 +198,7 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
 
     // 3. Wrapped Link (Button)
     if (data.downloadLink) {
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا للتحميل');
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا');
     }
 
     const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
@@ -226,6 +227,7 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     });
 
     onProgress("2/5: التحديث في الصفحة الرئيسية...");
+    // Robust insertion into All and specific category
     await insertCardIntoFile(RepoConfig.INDEX_FILE, [
         { selector: '#tab-all', html: cardHtml },
         { selector: `#tab-${data.category}`, html: cardHtml }
@@ -334,7 +336,7 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     });
 
     if (data.downloadLink) {
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا للتحميل');
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, data.downloadText || 'اضغط هنا');
     }
 
     const prose = doc.querySelector('.prose');
@@ -342,17 +344,81 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
 
     await updateFile(oldFileName, serializeHtml(doc), `Update article: ${oldFileName}`, sha);
     
-    onProgress("تحديث البطاقات...");
-    const cardHtml = ARTICLE_CARD_TEMPLATE({
+    onProgress("تحديث البطاقات في الصفحة الرئيسية...");
+    
+    // Advanced Index Update: Handle category changes correctly
+    try {
+        const { content: indexContent, sha: indexSha } = await getFile(RepoConfig.INDEX_FILE);
+        const indexDoc = new DOMParser().parseFromString(indexContent, 'text/html');
+        
+        const cardHtml = ARTICLE_CARD_TEMPLATE({
+            filename: oldFileName,
+            title: data.title,
+            description: data.description,
+            image: data.image,
+            category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
+        });
+
+        // 1. Update in 'All' Tab (Preserve position if possible)
+        const allTabCard = indexDoc.querySelector(`#tab-all a[href="${oldFileName}"]`);
+        if (allTabCard) {
+            const temp = indexDoc.createElement('div');
+            temp.innerHTML = cardHtml;
+            allTabCard.replaceWith(temp.firstElementChild!);
+        } else {
+            // If missing, insert at top
+            const allGrid = indexDoc.querySelector('#tab-all .grid') || indexDoc.querySelector('#tab-all');
+            if (allGrid) {
+                const temp = indexDoc.createElement('div');
+                temp.innerHTML = cardHtml;
+                if(allGrid.firstChild) allGrid.insertBefore(temp.firstElementChild!, allGrid.firstChild);
+                else allGrid.appendChild(temp.firstElementChild!);
+            }
+        }
+
+        // 2. Handle Categories (Move if category changed)
+        CATEGORIES.forEach(cat => {
+            const tabId = `#tab-${cat.id}`;
+            const cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`);
+            
+            if (cat.id === data.category) {
+                // Should be here
+                if (cardInTab) {
+                    // Replace in place
+                    const temp = indexDoc.createElement('div');
+                    temp.innerHTML = cardHtml;
+                    cardInTab.replaceWith(temp.firstElementChild!);
+                } else {
+                    // Insert at top
+                    const container = indexDoc.querySelector(tabId);
+                    if (container) {
+                        const grid = container.querySelector('.grid') || container;
+                        const temp = indexDoc.createElement('div');
+                        temp.innerHTML = cardHtml;
+                        if(grid.firstChild) grid.insertBefore(temp.firstElementChild!, grid.firstChild);
+                        else grid.appendChild(temp.firstElementChild!);
+                    }
+                }
+            } else {
+                // Should NOT be here
+                if (cardInTab) {
+                    cardInTab.remove();
+                }
+            }
+        });
+
+        await updateFile(RepoConfig.INDEX_FILE, serializeHtml(indexDoc), `Update index for ${oldFileName}`, indexSha);
+
+    } catch (e) { console.warn("Index update failed", e); }
+
+    // Update Articles Page (Simple replacement)
+    await replaceCardInFile(RepoConfig.ARTICLES_FILE, oldFileName, ARTICLE_CARD_TEMPLATE({
         filename: oldFileName,
         title: data.title,
         description: data.description,
         image: data.image,
         category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
-    });
-    
-    await replaceCardInFile(RepoConfig.INDEX_FILE, oldFileName, cardHtml);
-    await replaceCardInFile(RepoConfig.ARTICLES_FILE, oldFileName, cardHtml);
+    }));
 
     onProgress("تم التحديث!");
 };
@@ -764,7 +830,9 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
         const reader = new FileReader();
         reader.onload = async () => {
             try {
+                // Get raw base64 string
                 const content = (reader.result as string).split(',')[1];
+                
                 // Unique Filename Generation: timestamp + random string
                 const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 const ext = file.name.split('.').pop() || 'jpg';
@@ -778,7 +846,8 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                     if(existing.ok) sha = (await existing.json()).sha;
                 } catch {}
 
-                await updateFile(path, atob(content), "Upload Image", sha); 
+                // Send true for isBase64 to skip double encoding
+                await updateFile(path, content, "Upload Image", sha, true); 
                 const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
                 resolve(url);
             } catch (e) { reject(e); }
