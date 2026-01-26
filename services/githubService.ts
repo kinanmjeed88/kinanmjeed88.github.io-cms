@@ -160,16 +160,37 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     onProgress("1/5: إنشاء ملف المقال...");
     
     let bodyContent = '';
+    
+    // 1. Video (Step 2.c from Guide)
     if (data.videoUrl) {
         let videoId = data.videoUrl.split('v=')[1]?.split('&')[0] || data.videoUrl.split('/').pop() || '';
-        if (videoId) bodyContent += `<div class="video-container" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin-bottom:20px;border-radius:12px;"><iframe style="position:absolute;top:0;left:0;width:100%;height:100%;" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allowfullscreen></iframe></div>`;
+        if (videoId) {
+            bodyContent += `
+<div class="video-container my-8">
+    <iframe src="https://www.youtube.com/embed/${videoId}" title="${data.title}" allowfullscreen></iframe>
+</div>\n`;
+        }
     }
+
+    // 2. Main Content
     const lines = data.mainText.split('\n').filter(p => p.trim());
     lines.forEach(line => {
         if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
         else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
         else bodyContent += `<p>${line}</p>`;
     });
+
+    // 3. Wrapped Link (Step 2.d from Guide)
+    if (data.downloadLink) {
+        bodyContent += `
+<div class="my-8 flex justify-center">
+    <a href="${data.downloadLink}" target="_blank" class="btn-wrapped-link">
+        <!-- أيقونة التحميل أو الرابط -->
+        <i data-lucide="download"></i>
+        <span>${data.downloadText || 'اضغط هنا ..'}</span>
+    </a>
+</div>\n`;
+    }
 
     const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
     let fileHtml = BASE_ARTICLE_TEMPLATE
@@ -250,6 +271,7 @@ export const updateSearchData = async (data: ArticleContent, fileName: string) =
     try {
         const filePath = 'assets/js/search-data.js';
         const { content, sha } = await getFile(filePath);
+        // Match Guide's format for search index
         const newEntry = `    {
         title: "${data.title.replace(/"/g, '\\"')}",
         desc: "${data.description.replace(/"/g, '\\"')}",
@@ -269,19 +291,40 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     const doc = parser.parseFromString(content, "text/html");
 
     doc.title = `${data.title} | TechTouch`;
-    doc.querySelector('h1')!.textContent = data.title;
+    const h1 = doc.querySelector('h1');
+    if(h1) h1.textContent = data.title;
+    
     doc.querySelector('meta[name="description"]')?.setAttribute('content', data.description);
     
     const img = doc.querySelector('#main-image') || doc.querySelector('main img');
     if (img) img.setAttribute('src', data.image);
 
     let bodyContent = '';
+    // Reconstruct body with video/link options if present
+    if (data.videoUrl) {
+        let videoId = data.videoUrl.split('v=')[1]?.split('&')[0] || data.videoUrl.split('/').pop() || '';
+        if (videoId) {
+            bodyContent += `<div class="video-container my-8"><iframe src="https://www.youtube.com/embed/${videoId}" title="${data.title}" allowfullscreen></iframe></div>\n`;
+        }
+    }
+
     const lines = data.mainText.split('\n').filter(p => p.trim());
     lines.forEach(line => {
         if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
         else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
         else bodyContent += `<p>${line}</p>`;
     });
+
+    if (data.downloadLink) {
+        bodyContent += `
+<div class="my-8 flex justify-center">
+    <a href="${data.downloadLink}" target="_blank" class="btn-wrapped-link">
+        <i data-lucide="download"></i>
+        <span>${data.downloadText || 'اضغط هنا ..'}</span>
+    </a>
+</div>\n`;
+    }
+
     const prose = doc.querySelector('.prose');
     if (prose) prose.innerHTML = bodyContent;
 
@@ -325,12 +368,10 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
     try {
         const { content } = await getFile(RepoConfig.TOOLS_SITES_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        
-        // Strategy 1: Look for anchors with the specific marquee class used in the template
+        // Search for cards based on unique class
         const cards = Array.from(doc.querySelectorAll('.marquee-text-content')).map(el => el.closest('a')).filter(Boolean) as HTMLAnchorElement[];
         
         if (cards.length === 0) {
-             // Fallback Strategy 2: Look for immediate children of grid if standard class not found
              const gridCards = Array.from(doc.querySelectorAll('.grid > a'));
              return gridCards.map(card => parseCard(card));
         }
@@ -340,12 +381,10 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
 };
 
 function parseCard(card: Element): DirectoryItem {
-    // Attempt to find the colored icon container
     const colorDiv = card.querySelector('div[class*="w-10"]'); 
     let colorClass = 'bg-blue-600';
     
     if (colorDiv) {
-        // Find class starting with bg- excluding bg-white/slate/gray-50
         const cls = Array.from(colorDiv.classList).find(c => c.startsWith('bg-') && !c.includes('white') && !c.includes('slate') && !c.includes('gray-5'));
         if (cls) colorClass = cls;
     }
@@ -366,7 +405,6 @@ export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: s
          const doc = new DOMParser().parseFromString(content, 'text/html');
          
          let grid = doc.querySelector('.grid');
-         // If .grid class not found, try to find the container of existing items
          if(!grid) {
              const existingItem = doc.querySelector('.marquee-text-content')?.closest('a')?.parentElement;
              if (existingItem) grid = existingItem;
@@ -382,7 +420,7 @@ export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: s
                  if (existing) {
                      existing.replaceWith(newEl);
                  } else {
-                     // Check if there's a "Folder" item (special item), insert before it
+                     // Try insert before Folder item (usually the last or big one)
                      const folderItem = grid.querySelector('a[href*="t.me/addlist"]');
                      if (folderItem) {
                          grid.insertBefore(newEl, folderItem);
@@ -420,13 +458,11 @@ export const deleteDirectoryItem = async (link: string, onProgress: (msg: string
     }
 };
 
-// --- ADS LOGIC (STRICT GUIDE: Custom vs Hybrid) ---
+// --- ADS LOGIC ---
 
-// Custom Only Template: Removes Google script entirely
 const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
 <div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
     <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
-    <!-- رابط وصورة إعلانك الخاص -->
     <a href="${linkUrl || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
         <img src="${imageUrl}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
     </a>
@@ -440,8 +476,6 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
         
         let updatedCount = 0;
-        
-        // Ensure imageUrl is valid (not empty, not undefined string)
         const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
         
         const newAdHtml = validCustomImage
@@ -482,7 +516,6 @@ export const getAboutData = async (): Promise<AboutPageData> => {
         const { content } = await getFile('about.html');
         const doc = new DOMParser().parseFromString(content, 'text/html');
         
-        // Helper to find title of section
         const findSection = (index: number) => {
             const uls = doc.querySelectorAll('ul');
             if (uls[index]) {
@@ -526,30 +559,24 @@ export const saveAboutData = async (data: AboutPageData, onProgress: (msg: strin
         const { content, sha } = await getFile('about.html');
         const doc = new DOMParser().parseFromString(content, 'text/html');
 
-        // 1. Title & Bio
         if (doc.querySelector('h1')) doc.querySelector('h1')!.textContent = data.title;
-        // Bio usually first paragraph in container
         const bioP = doc.querySelector('.bg-white p') || doc.querySelector('main p');
         if (bioP) bioP.textContent = data.bio;
 
-        // 2. Header
         const headerDiv = doc.querySelector('.header-bg') || doc.querySelector('div[class*="bg-gradient-to-r"]');
         if (headerDiv && data.headerImage) {
             headerDiv.classList.remove('bg-gradient-to-r', 'from-blue-700', 'to-blue-500');
             headerDiv.setAttribute('style', `background-image: url('${data.headerImage}'); background-size: cover; background-position: center;`);
         }
 
-        // 3. Profile Image
         const profileImg = doc.querySelector('img.rounded-full');
         if (profileImg) profileImg.setAttribute('src', data.image);
 
-        // 4. Sections
         const updateSection = (index: number, title: string, items: string[], color: string) => {
             const uls = doc.querySelectorAll('ul');
             if (uls[index]) {
                 const titleEl = uls[index].previousElementSibling;
                 if (titleEl) titleEl.textContent = title;
-                
                 uls[index].innerHTML = items.map(item => 
                     `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${item}</li>`
                 ).join('');
@@ -673,22 +700,15 @@ export const parseTicker = async (): Promise<TickerData> => {
     try {
         const { content } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        
         let container = doc.querySelector('marquee');
         if (!container) container = doc.querySelector('.animate-marquee');
 
         if (container) {
             const anchor = container.querySelector('a');
             if (anchor) {
-                return { 
-                    text: anchor.textContent?.trim() || '', 
-                    link: anchor.getAttribute('href') || '#' 
-                };
+                return { text: anchor.textContent?.trim() || '', link: anchor.getAttribute('href') || '#' };
             }
-            return { 
-                text: container.textContent?.trim() || '', 
-                link: '#' 
-            };
+            return { text: container.textContent?.trim() || '', link: '#' };
         }
         return { text: '', link: '' };
     } catch { return { text: '', link: '' }; }
@@ -699,20 +719,17 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
     try {
         const { content, sha } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        
         let container = doc.querySelector('marquee');
         if (!container) container = doc.querySelector('.animate-marquee');
         
         if (container) {
-            container.innerHTML = ''; // Clear previous content (spans/text)
-            
+            container.innerHTML = ''; 
             const a = doc.createElement('a');
             a.href = link;
             a.textContent = text;
             a.className = "text-white hover:text-blue-300 transition-colors mx-4 font-medium flex items-center"; 
             a.style.color = "inherit";
             a.style.textDecoration = "none";
-            
             container.appendChild(a);
         }
         
@@ -739,14 +756,13 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                 const filename = type === 'profile' ? 'me.jpg' : `img_${Date.now()}.jpg`;
                 const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
                 
-                // Check if file exists to get SHA for overwrite
                 let sha;
                 try {
                     const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
                     if(existing.ok) sha = (await existing.json()).sha;
                 } catch {}
 
-                await updateFile(path, atob(content), "Upload Image", sha); // Use raw update logic helper
+                await updateFile(path, atob(content), "Upload Image", sha); 
                 const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
                 resolve(url);
             } catch (e) { reject(e); }
@@ -756,16 +772,12 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
 };
 
 export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
-    // Actually the user wants to UPLOAD 'me.jpg' to assets/images/. 
-    // This is handled by uploadImage('profile'). 
-    // But if they just paste a URL, we update the HTML.
     onProgress("تحديث الروابط في HTML...");
      try {
         const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
         const files = await response.json();
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
 
-        // Cache busting: Append timestamp
         const cleanUrl = url.split('?')[0]; 
         const newSrc = `${cleanUrl}?v=${Date.now()}`;
 
@@ -779,7 +791,6 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
                     const alt = img.getAttribute('alt') || '';
-                    // Improved Selector for Profile Picture
                     if (
                         src.includes('me.jpg') || 
                         src.includes('profile') || 
@@ -801,12 +812,35 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
 export const getArticleDetails = async (fileName: string): Promise<ArticleContent> => {
     const { content } = await getFile(fileName);
     const doc = new DOMParser().parseFromString(content, 'text/html');
+    
+    // Extract main text from standard elements
     let mainText = '';
     doc.querySelectorAll('.prose p, .prose h2, .prose h3').forEach(el => {
         if(el.tagName === 'H2') mainText += `## ${el.textContent}\n`;
         else if(el.tagName === 'H3') mainText += `### ${el.textContent}\n`;
         else mainText += `${el.textContent}\n`;
     });
+
+    // Extract Video URL from iframe
+    const videoFrame = doc.querySelector('.video-container iframe');
+    let videoUrl = '';
+    if (videoFrame) {
+        const src = videoFrame.getAttribute('src') || '';
+        if (src.includes('/embed/')) {
+            const id = src.split('/embed/')[1].split('?')[0];
+            videoUrl = `https://www.youtube.com/watch?v=${id}`;
+        }
+    }
+
+    // Extract Wrapped Link
+    const btnLink = doc.querySelector('a.btn-wrapped-link');
+    let downloadLink = '';
+    let downloadText = '';
+    if (btnLink) {
+        downloadLink = btnLink.getAttribute('href') || '';
+        downloadText = btnLink.querySelector('span')?.textContent || '';
+    }
+
     return {
         fileName,
         title: doc.querySelector('h1')?.textContent || '',
@@ -814,6 +848,9 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
         image: doc.querySelector('#main-image')?.getAttribute('src') || '',
         category: 'tech',
         mainText: mainText.trim(),
+        videoUrl,
+        downloadLink,
+        downloadText,
         content,
         link: fileName
     };

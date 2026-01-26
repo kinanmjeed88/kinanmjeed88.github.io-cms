@@ -21,6 +21,8 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
     link: '',
     mainText: '',
     videoUrl: '',
+    downloadLink: '',
+    downloadText: 'اضغط هنا ..',
     content: ''
   });
   
@@ -37,7 +39,7 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
     setStatus(`جاري تحميل ${fileName}...`);
     try {
       const articleData = await getArticleDetails(fileName);
-      setFormData(articleData);
+      setFormData(prev => ({ ...prev, ...articleData }));
       setStatus('');
     } catch (e: any) {
       setStatus('خطأ في تحميل الملف: ' + e.message);
@@ -138,6 +140,22 @@ export const ArticleEditor: React.FC<Props> = ({ editFileName, onClose }) => {
             onChange={e => setFormData({...formData, videoUrl: e.target.value})}
             placeholder="https://youtube.com/watch?v=..."
           />
+        </div>
+
+        {/* Wrapped Link Fields */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700/50">
+            <Input 
+              label="رابط التحميل / الرابط الخارجي (اختياري)" 
+              value={formData.downloadLink} 
+              onChange={e => setFormData({...formData, downloadLink: e.target.value})}
+              placeholder="https://..."
+            />
+            <Input 
+              label="نص الزر (مثل: اضغط هنا للتحميل)" 
+              value={formData.downloadText} 
+              onChange={e => setFormData({...formData, downloadText: e.target.value})}
+              placeholder="اضغط هنا .."
+            />
         </div>
 
         <div className="relative">

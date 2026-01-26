@@ -13,6 +13,8 @@ export interface ArticleContent extends ArticleMetadata {
   content: string;
   mainText: string;
   videoUrl?: string;
+  downloadLink?: string;
+  downloadText?: string;
 }
 
 // New Metadata Structures
