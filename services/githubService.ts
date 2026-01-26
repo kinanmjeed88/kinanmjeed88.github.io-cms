@@ -404,7 +404,7 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         
         let updatedCount = 0;
         
-        // Ensure imageUrl is valid (not empty, not undefined string)
+        // Ensure imageUrl is valid (not empty, not undefined string, not 'undefined')
         const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
         
         const newAdHtml = validCustomImage
@@ -422,8 +422,10 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
                 containers.forEach(el => {
                     const temp = doc.createElement('div');
                     temp.innerHTML = newAdHtml;
-                    el.replaceWith(temp.firstElementChild!);
-                    isModified = true;
+                    if (el.parentNode) {
+                        el.replaceWith(temp.firstElementChild!);
+                        isModified = true;
+                    }
                 });
 
                 if (isModified) {
@@ -634,13 +636,18 @@ export const parseTicker = async (): Promise<TickerData> => {
     try {
         const { content } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const marquee = doc.querySelector('marquee');
-        // Fix: Check for anchor tag inside marquee
-        const anchor = marquee?.querySelector('a');
-        return { 
-            text: anchor?.textContent?.trim() || marquee?.textContent?.trim() || '', 
-            link: anchor?.getAttribute('href') || '#' 
-        };
+        
+        // Use getElementsByTagName to catch all marquees, not just the first one if there are multiple sections
+        const marquees = doc.getElementsByTagName('marquee');
+        if (marquees.length > 0) {
+            const marquee = marquees[0];
+            const anchor = marquee.querySelector('a');
+            return { 
+                text: anchor?.textContent?.trim() || marquee.textContent?.trim() || '', 
+                link: anchor?.getAttribute('href') || '#' 
+            };
+        }
+        return { text: '', link: '' };
     } catch { return { text: '', link: '' }; }
 };
 
@@ -649,9 +656,10 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
     try {
         const { content, sha } = await getFile(RepoConfig.INDEX_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const marquee = doc.querySelector('marquee');
-        if (marquee) {
-            // Fix: Create or update anchor tag inside marquee
+        const marquees = doc.getElementsByTagName('marquee');
+        
+        if (marquees.length > 0) {
+            const marquee = marquees[0];
             marquee.innerHTML = ''; // Clear previous content
             const a = doc.createElement('a');
             a.href = link;
@@ -660,6 +668,7 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
             a.style.textDecoration = 'none';
             marquee.appendChild(a);
         }
+        
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(doc), "Update Ticker", sha);
         onProgress("تم التحديث!");
     } catch(e: any) { throw new Error(e.message); }
@@ -710,7 +719,9 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
 
         // Cache busting: Append timestamp
-        const cleanUrl = url.split('?')[0]; 
+        // We assume the user has already uploaded 'me.jpg' to assets/images/me.jpg via uploadImage('profile')
+        // We want to point all profile images to this new path with a timestamp.
+        const cleanUrl = url.includes('?') ? url.split('?')[0] : url; 
         const newSrc = `${cleanUrl}?v=${Date.now()}`;
 
         for (const file of htmlFiles) {
@@ -719,9 +730,16 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 const doc = new DOMParser().parseFromString(content, 'text/html');
                 const imgs = Array.from(doc.querySelectorAll('img'));
                 let modified = false;
+                
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
-                    if (src.includes('profile') || src.includes('me.jpg') || img.classList.contains('rounded-full')) {
+                    // Improved Selector for Profile Picture
+                    if (
+                        src.includes('me.jpg') || 
+                        src.includes('profile') || 
+                        img.classList.contains('rounded-full') || 
+                        (img.alt && img.alt.toLowerCase().includes('profile'))
+                    ) {
                         img.setAttribute('src', newSrc);
                         modified = true;
                     }
