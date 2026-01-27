@@ -57,13 +57,15 @@ const fetchGitHub = async (url: string, options: RequestInit = {}) => {
 
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
 
-// Helper to extract YouTube ID from various URL formats
+// Helper to extract YouTube ID
 const getYouTubeId = (url: string): string | null => {
     if (!url) return null;
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : null;
 };
+
+// --- CORE FUNCTIONS ---
 
 export const getFile = async (path: string): Promise<{ content: string; sha: string }> => {
   const response = await fetchGitHub(`${API_BASE}/contents/${path}?t=${Date.now()}`, { headers: getHeaders() });
@@ -73,8 +75,6 @@ export const getFile = async (path: string): Promise<{ content: string; sha: str
 };
 
 export const updateFile = async (path: string, content: string, message: string, sha?: string, isBase64: boolean = false): Promise<void> => {
-  // If isBase64 is true, we use content as is. Otherwise we encode it using UTF-8 safe method.
-  // GitHub API requires content to be Base64 encoded string.
   const body: any = { message, content: isBase64 ? content : toBase64(content) };
   if (sha) body.sha = sha;
   await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
@@ -84,15 +84,86 @@ export const deleteFile = async (path: string, message: string, sha: string): Pr
   await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "DELETE", headers: getHeaders(), body: JSON.stringify({ message, sha }) });
 };
 
-// --- ARTICLE LOGIC ---
+// --- BUSINESS LOGIC HELPERS ---
 
-// Fallback: Fetch all HTML files and parse them if metadata is empty
+/**
+ * Robust slug generation that supports Arabic and falls back to timestamp if empty.
+ */
+const generateSlug = (title: string): string => {
+    // Replace spaces with hyphens, remove special chars but keep Arabic (u0600-u06FF) and English/Numbers
+    let slug = title.trim()
+        .replace(/\s+/g, '-')
+        .replace(/[^\w\u0600-\u06FF\-]+/g, '') 
+        .toLowerCase();
+    
+    // Remove duplicate hyphens
+    slug = slug.replace(/-+/g, '-');
+    // Remove leading/trailing hyphens
+    slug = slug.replace(/^-+|-+$/g, '');
+
+    // Fallback if slug is too short or empty
+    if (!slug || slug.length < 2) {
+        slug = `post-${Date.now()}`;
+    }
+    
+    return slug;
+};
+
+/**
+ * DRY Principle: Centralized HTML builder for Create and Update operations.
+ */
+const buildArticleHtml = (data: ArticleContent, fileName: string, today: string, adSlot: string): string => {
+    let bodyContent = '';
+    
+    // 1. Video
+    if (data.videoUrl) {
+        const videoId = getYouTubeId(data.videoUrl);
+        if (videoId) {
+            bodyContent += `
+<div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
+    <iframe 
+        src="https://www.youtube.com/embed/${videoId}" 
+        title="${data.title}" 
+        class="absolute inset-0 w-full h-full"
+        allowfullscreen>
+    </iframe>
+</div>\n`;
+        }
+    }
+
+    // 2. Main Content (Markdown-like parsing)
+    const lines = data.mainText.split('\n').filter(p => p.trim());
+    lines.forEach(line => {
+        if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
+        else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
+        else bodyContent += `<p>${line}</p>`;
+    });
+
+    // 3. Download Button
+    if (data.downloadLink) {
+        const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
+    }
+
+    const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
+    
+    return BASE_ARTICLE_TEMPLATE
+        .replace(/{{TITLE}}/g, data.title)
+        .replace(/{{DESCRIPTION}}/g, data.description)
+        .replace(/{{FILENAME}}/g, fileName)
+        .replace(/{{IMAGE}}/g, data.image)
+        .replace(/{{DATE}}/g, today)
+        .replace('{{AD_SLOT_BOTTOM}}', adHtml)
+        .replace('{{CONTENT_BODY}}', bodyContent);
+};
+
+// --- ARTICLE OPERATIONS ---
+
 export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): Promise<ArticleMetadata[]> => {
     onProgress("جلب قائمة الملفات من GitHub...");
     const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
     const files = await response.json();
     
-    // Filter for article files (heuristic: ends with .html, contains hyphen, not a system file)
     const systemFiles = ['index.html', 'articles.html', 'about.html', 'tools.html', 'tools-sites.html', 'tools-phones.html', 'tools-compare.html', 'tool-analysis.html', '404.html'];
     const articleFiles = files.filter((f: any) => 
         f.name.endsWith('.html') && 
@@ -113,7 +184,7 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
             const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
             const image = doc.querySelector('#main-image')?.getAttribute('src') || doc.querySelector('main img')?.getAttribute('src') || '';
             
-            // Extract category from filename or badge
+            // Extract category logic
             let category: any = 'tech';
             const catLabel = doc.querySelector('.absolute.bottom-0.right-0')?.textContent?.trim();
             if (catLabel) {
@@ -138,7 +209,6 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
         }
     }
 
-    // Update metadata.json with the results to speed up next load
     onProgress("تحديث قاعدة البيانات...");
     const { sha: metaSha } = await getMetadata();
     const newMetadata: MetadataRoot = {
@@ -162,56 +232,14 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
 };
 
 export const createArticle = async (data: ArticleContent, onProgress: (msg: string) => void) => {
-    const slug = data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const slug = generateSlug(data.title);
     const newFileName = `${data.category}-${slug}.html`;
     const today = new Date().toLocaleDateString('ar-EG');
-    const adSlot = 'YOUR_AD_SLOT_ID'; // Default placeholder
+    const adSlot = 'YOUR_AD_SLOT_ID';
     
     onProgress("1/5: إنشاء ملف المقال...");
     
-    let bodyContent = '';
-    
-    // 1. Video (Embedded Iframe) - Guide Style
-    if (data.videoUrl) {
-        const videoId = getYouTubeId(data.videoUrl);
-        if (videoId) {
-            bodyContent += `
-<div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
-    <iframe 
-        src="https://www.youtube.com/embed/${videoId}" 
-        title="${data.title}" 
-        class="absolute inset-0 w-full h-full"
-        allowfullscreen>
-    </iframe>
-</div>\n`;
-        }
-    }
-
-    // 2. Main Content
-    const lines = data.mainText.split('\n').filter(p => p.trim());
-    lines.forEach(line => {
-        if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
-        else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
-        else bodyContent += `<p>${line}</p>`;
-    });
-
-    // 3. Wrapped Link (Button)
-    if (data.downloadLink) {
-        // Enforce "اضغط هنا" if text is not provided or generic
-        const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
-    }
-
-    const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
-    let fileHtml = BASE_ARTICLE_TEMPLATE
-        .replace(/{{TITLE}}/g, data.title)
-        .replace(/{{DESCRIPTION}}/g, data.description)
-        .replace(/{{FILENAME}}/g, newFileName)
-        .replace(/{{IMAGE}}/g, data.image)
-        .replace(/{{DATE}}/g, today)
-        // .replace(/{{CATEGORY_LABEL}}/g, CATEGORIES.find(c => c.id === data.category)?.label || data.category) // Not used in new base template
-        .replace('{{AD_SLOT_BOTTOM}}', adHtml)
-        .replace('{{CONTENT_BODY}}', bodyContent);
+    const fileHtml = buildArticleHtml(data, newFileName, today, adSlot);
 
     try {
         await updateFile(newFileName, fileHtml, `Create Article: ${data.title}`);
@@ -228,9 +256,9 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     });
 
     onProgress("2/5: التحديث في الصفحة الرئيسية...");
-    // Robust insertion into All and specific category
     await insertCardIntoFile(RepoConfig.INDEX_FILE, [
         { selector: '#tab-all', html: cardHtml },
+        { selector: '#tab-articles', html: cardHtml },
         { selector: `#tab-${data.category}`, html: cardHtml }
     ], `Add ${newFileName} to index`);
 
@@ -251,106 +279,21 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     onProgress("تم النشر بنجاح!");
 };
 
-const insertCardIntoFile = async (filePath: string, insertions: {selector: string, html: string}[], commitMsg: string) => {
-    try {
-        const { content, sha } = await getFile(filePath);
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(content, 'text/html');
-        let modified = false;
-
-        insertions.forEach(ins => {
-            // Find the container
-            const container = doc.querySelector(ins.selector);
-            if (container) {
-                // Determine where to insert (try to find a .grid inside, or use the container itself)
-                const target = container.classList.contains('grid') ? container : container.querySelector('.grid') || container;
-                
-                const temp = doc.createElement('div');
-                temp.innerHTML = ins.html;
-                const newNode = temp.firstElementChild;
-                
-                if (newNode) {
-                    if (target.firstChild) target.insertBefore(newNode, target.firstChild);
-                    else target.appendChild(newNode);
-                    modified = true;
-                }
-            }
-        });
-
-        if (modified) await updateFile(filePath, serializeHtml(doc), commitMsg, sha);
-    } catch (e) { console.warn(`Failed to update ${filePath}`, e); }
-};
-
-export const updateSearchData = async (data: ArticleContent, fileName: string) => {
-    try {
-        const filePath = 'assets/js/search-data.js';
-        const { content, sha } = await getFile(filePath);
-        // Match Guide's format for search index
-        const newEntry = `    {
-        title: "${data.title.replace(/"/g, '\\"')}",
-        desc: "${data.description.replace(/"/g, '\\"')}",
-        url: "${fileName}",
-        category: "${CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'}",
-        image: "${data.image}"
-    },`;
-        const updatedContent = content.replace(/const searchIndex\s*=\s*\[/, `const searchIndex = [\n${newEntry}`);
-        await updateFile(filePath, updatedContent, `Update Search Index for ${fileName}`, sha);
-    } catch (e) { console.warn("Search index update failed", e); }
-};
-
 export const updateArticle = async (oldFileName: string, data: ArticleContent, onProgress: (msg: string) => void) => {
     onProgress(`جاري تحديث ${oldFileName}...`);
-    const { content, sha } = await getFile(oldFileName);
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(content, "text/html");
-
-    doc.title = `${data.title} | TechTouch`;
-    const h1 = doc.querySelector('h1');
-    if(h1) h1.textContent = data.title;
     
-    doc.querySelector('meta[name="description"]')?.setAttribute('content', data.description);
+    // Check if we need to preserve existing SHA
+    const { sha } = await getFile(oldFileName);
+    const today = new Date().toLocaleDateString('ar-EG');
+    const adSlot = 'YOUR_AD_SLOT_ID';
+
+    // Rebuild full HTML to ensure structure consistency
+    const fileHtml = buildArticleHtml(data, oldFileName, today, adSlot);
     
-    // Update main image in article
-    const img = doc.querySelector('#main-image') || doc.querySelector('main img');
-    if (img) img.setAttribute('src', data.image);
-
-    let bodyContent = '';
-    // Reconstruct body with video/link options if present
-    if (data.videoUrl) {
-        const videoId = getYouTubeId(data.videoUrl);
-        if (videoId) {
-            bodyContent += `
-<div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
-    <iframe 
-        src="https://www.youtube.com/embed/${videoId}" 
-        title="${data.title}" 
-        class="absolute inset-0 w-full h-full"
-        allowfullscreen>
-    </iframe>
-</div>\n`;
-        }
-    }
-
-    const lines = data.mainText.split('\n').filter(p => p.trim());
-    lines.forEach(line => {
-        if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
-        else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
-        else bodyContent += `<p>${line}</p>`;
-    });
-
-    if (data.downloadLink) {
-         const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
-    }
-
-    const prose = doc.querySelector('.prose');
-    if (prose) prose.innerHTML = bodyContent;
-
-    await updateFile(oldFileName, serializeHtml(doc), `Update article: ${oldFileName}`, sha);
+    await updateFile(oldFileName, fileHtml, `Update article: ${oldFileName}`, sha);
     
     onProgress("تحديث البطاقات في الصفحة الرئيسية...");
     
-    // Advanced Index Update: Handle category changes correctly
     try {
         const { content: indexContent, sha: indexSha } = await getFile(RepoConfig.INDEX_FILE);
         const indexDoc = new DOMParser().parseFromString(indexContent, 'text/html');
@@ -363,41 +306,46 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
             category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
         });
 
-        // 1. Update in 'All' Tab (Use href includes matching to be safe)
-        // Try precise match first, then fallback to filename match
-        let allTabCard = indexDoc.querySelector(`#tab-all a[href="${oldFileName}"]`);
-        if (!allTabCard) allTabCard = indexDoc.querySelector(`#tab-all a[href*="${oldFileName}"]`);
+        // Update in All/Articles tabs
+        const updateInContainer = (selector: string) => {
+            // Try exact match first, then fuzzy
+            let card = indexDoc.querySelector(`${selector} a[href="${oldFileName}"]`) || 
+                       indexDoc.querySelector(`${selector} a[href*="${oldFileName}"]`);
 
-        if (allTabCard) {
-            const temp = indexDoc.createElement('div');
-            temp.innerHTML = cardHtml;
-            allTabCard.replaceWith(temp.firstElementChild!);
-        } else {
-            // If missing, insert at top of All Tab
-            const allGrid = indexDoc.querySelector('#tab-all .grid') || indexDoc.querySelector('#tab-all');
-            if (allGrid) {
+            if (card) {
                 const temp = indexDoc.createElement('div');
                 temp.innerHTML = cardHtml;
-                if(allGrid.firstChild) allGrid.insertBefore(temp.firstElementChild!, allGrid.firstChild);
-                else allGrid.appendChild(temp.firstElementChild!);
+                // Replace the parent wrapper if it exists (assuming <a> is wrapped in <div> in some templates, but here card is <a>)
+                // The template returns <a>...</a>.
+                card.replaceWith(temp.firstElementChild!);
+            } else {
+                // Insert at top if missing
+                const container = indexDoc.querySelector(selector);
+                if (container) {
+                    const grid = container.classList.contains('grid') ? container : container.querySelector('.grid') || container;
+                    const temp = indexDoc.createElement('div');
+                    temp.innerHTML = cardHtml;
+                    if(grid.firstChild) grid.insertBefore(temp.firstElementChild!, grid.firstChild);
+                    else grid.appendChild(temp.firstElementChild!);
+                }
             }
-        }
+        };
 
-        // 2. Handle Categories (Move if category changed)
+        updateInContainer('#tab-all');
+        updateInContainer('#tab-articles');
+
+        // Handle Category Changes
         CATEGORIES.forEach(cat => {
             const tabId = `#tab-${cat.id}`;
-            let cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`);
-            if (!cardInTab) cardInTab = indexDoc.querySelector(`${tabId} a[href*="${oldFileName}"]`);
+            let cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`) || 
+                            indexDoc.querySelector(`${tabId} a[href*="${oldFileName}"]`);
             
             if (cat.id === data.category) {
-                // Should be here
                 if (cardInTab) {
-                    // Replace in place
                     const temp = indexDoc.createElement('div');
                     temp.innerHTML = cardHtml;
                     cardInTab.replaceWith(temp.firstElementChild!);
                 } else {
-                    // Insert at top
                     const container = indexDoc.querySelector(tabId);
                     if (container) {
                         const grid = container.querySelector('.grid') || container;
@@ -408,18 +356,14 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
                     }
                 }
             } else {
-                // Should NOT be here
-                if (cardInTab) {
-                    cardInTab.remove();
-                }
+                if (cardInTab) cardInTab.remove();
             }
         });
 
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(indexDoc), `Update index for ${oldFileName}`, indexSha);
-
     } catch (e) { console.warn("Index update failed", e); }
 
-    // Update Articles Page (Simple replacement)
+    // Update Articles Page
     await replaceCardInFile(RepoConfig.ARTICLES_FILE, oldFileName, ARTICLE_CARD_TEMPLATE({
         filename: oldFileName,
         title: data.title,
@@ -431,12 +375,39 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     onProgress("تم التحديث!");
 };
 
+const insertCardIntoFile = async (filePath: string, insertions: {selector: string, html: string}[], commitMsg: string) => {
+    try {
+        const { content, sha } = await getFile(filePath);
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(content, 'text/html');
+        let modified = false;
+
+        insertions.forEach(ins => {
+            const container = doc.querySelector(ins.selector);
+            if (container) {
+                const target = container.classList.contains('grid') ? container : container.querySelector('.grid') || container;
+                const temp = doc.createElement('div');
+                temp.innerHTML = ins.html;
+                const newNode = temp.firstElementChild;
+                if (newNode) {
+                    if (target.firstChild) target.insertBefore(newNode, target.firstChild);
+                    else target.appendChild(newNode);
+                    modified = true;
+                }
+            }
+        });
+
+        if (modified) await updateFile(filePath, serializeHtml(doc), commitMsg, sha);
+    } catch (e) { console.warn(`Failed to update ${filePath}`, e); }
+};
+
 const replaceCardInFile = async (filePath: string, href: string, newHtml: string) => {
     try {
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        // Use inclusive matching for href
-        const cards = Array.from(doc.querySelectorAll(`a[href*="${href}"]`));
+        // Combined Selector for exact or relative path match
+        const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
+        
         if (cards.length > 0) {
             const temp = doc.createElement('div');
             temp.innerHTML = newHtml;
@@ -449,20 +420,76 @@ const replaceCardInFile = async (filePath: string, href: string, newHtml: string
     } catch (e) {}
 };
 
+/**
+ * More robust Search Data Updater.
+ * Inserts the new item at the start of the array by matching `const searchIndex = [`
+ */
+export const updateSearchData = async (data: ArticleContent, fileName: string) => {
+    try {
+        const filePath = 'assets/js/search-data.js';
+        const { content, sha } = await getFile(filePath);
+        
+        const newEntry = `    {
+        title: "${data.title.replace(/"/g, '\\"')}",
+        desc: "${data.description.replace(/"/g, '\\"')}",
+        url: "${fileName}",
+        category: "${CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'}",
+        image: "${data.image}"
+    },`;
+
+        // Flexible regex to match the start of the array definition
+        // Handles: const searchIndex = [ OR var searchIndex=[ etc.
+        const regex = /(const|var|let)\s+searchIndex\s*=\s*\[/;
+        
+        if (regex.test(content)) {
+            const updatedContent = content.replace(regex, `$&\n${newEntry}`);
+            await updateFile(filePath, updatedContent, `Update Search Index for ${fileName}`, sha);
+        } else {
+            console.warn("Could not find searchIndex array pattern");
+        }
+    } catch (e) { console.warn("Search index update failed", e); }
+};
+
+export const deleteArticle = async (fileName: string, onProgress: (msg: string) => void) => { 
+    onProgress("حذف الملفات...");
+    try { const { sha } = await getFile(fileName); await deleteFile(fileName, "Delete", sha); } catch(e) {}
+    await deleteCardFromFile(RepoConfig.INDEX_FILE, fileName);
+    await deleteCardFromFile(RepoConfig.ARTICLES_FILE, fileName);
+    const { data, sha } = await getMetadata();
+    data.articles = data.articles.filter(a => a.file !== fileName);
+    await saveMetadata(data, sha);
+    onProgress("تم الحذف!");
+};
+
+/**
+ * Robust deletion: handles full URL or relative paths matches
+ */
+const deleteCardFromFile = async (filePath: string, href: string) => {
+    try {
+        const { content, sha } = await getFile(filePath);
+        const doc = new DOMParser().parseFromString(content, 'text/html');
+        // Match href exactly or matches ending with filename
+        const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
+        
+        if(cards.length > 0) {
+            cards.forEach(c => c.remove());
+            await updateFile(filePath, serializeHtml(doc), `Remove card ${href}`, sha);
+        }
+    } catch {}
+};
+
 // --- DIRECTORY LOGIC ---
 
 export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
     try {
         const { content } = await getFile(RepoConfig.TOOLS_SITES_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        // Search for cards based on unique class
         const cards = Array.from(doc.querySelectorAll('.marquee-text-content')).map(el => el.closest('a')).filter(Boolean) as HTMLAnchorElement[];
         
         if (cards.length === 0) {
              const gridCards = Array.from(doc.querySelectorAll('.grid > a'));
              return gridCards.map(card => parseCard(card));
         }
-
         return cards.map(card => parseCard(card));
     } catch { return []; }
 };
@@ -470,12 +497,10 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
 function parseCard(card: Element): DirectoryItem {
     const colorDiv = card.querySelector('div[class*="w-12"]'); 
     let colorClass = 'bg-blue-600';
-    
     if (colorDiv) {
         const cls = Array.from(colorDiv.classList).find(c => c.startsWith('bg-') && !c.includes('white') && !c.includes('slate') && !c.includes('gray-5'));
         if (cls) colorClass = cls;
     }
-    
     return {
         title: card.querySelector('h3')?.textContent?.trim() || 'No Title',
         description: card.querySelector('p')?.textContent?.trim() || '',
@@ -501,30 +526,22 @@ export const saveDirectoryItem = async (item: DirectoryItem, onProgress: (msg: s
              const temp = doc.createElement('div');
              temp.innerHTML = DIRECTORY_ITEM_TEMPLATE(item);
              const newEl = temp.firstElementChild;
-             
              if (newEl) {
                  const existing = doc.querySelector(`a[href="${item.link}"]`);
                  if (existing) {
                      existing.replaceWith(newEl);
                  } else {
-                     // Try insert before Folder item (usually the last or big one)
                      const folderItem = grid.querySelector('a[href*="t.me/addlist"]');
-                     if (folderItem) {
-                         grid.insertBefore(newEl, folderItem);
-                     } else {
-                         grid.appendChild(newEl);
-                     }
+                     if (folderItem) grid.insertBefore(newEl, folderItem);
+                     else grid.appendChild(newEl);
                  }
-                 
                  await updateFile(RepoConfig.TOOLS_SITES_FILE, serializeHtml(doc), `Add Directory Item: ${item.title}`, sha);
                  onProgress("تم الحفظ!");
              }
          } else {
              throw new Error("لم يتم العثور على شبكة العرض (Grid) في الملف.");
          }
-     } catch(e: any) {
-         throw new Error("Failed: " + e.message);
-     }
+     } catch(e: any) { throw new Error("Failed: " + e.message); }
 };
 
 export const deleteDirectoryItem = async (link: string, onProgress: (msg: string) => void) => {
@@ -540,248 +557,10 @@ export const deleteDirectoryItem = async (link: string, onProgress: (msg: string
         } else {
             onProgress("لم يتم العثور على العنصر");
         }
-    } catch(e: any) {
-        throw new Error(e.message);
-    }
+    } catch(e: any) { throw new Error(e.message); }
 };
 
-// --- ADS LOGIC ---
-
-const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
-<div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
-    <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
-    <a href="${linkUrl || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
-        <img src="${imageUrl}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
-    </a>
-</div>`;
-
-export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotId: string, onProgress: (msg: string) => void) => {
-    onProgress("جاري فحص جميع ملفات الموقع...");
-    try {
-        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
-        const files = await response.json();
-        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
-        
-        let updatedCount = 0;
-        const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
-        
-        const newAdHtml = validCustomImage
-            ? CUSTOM_AD_TEMPLATE(imageUrl, linkUrl) 
-            : HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlotId);
-
-        for (const file of htmlFiles) {
-            try {
-                onProgress(`تحديث ${file.name}...`);
-                const { content, sha } = await getFile(file.path);
-                const doc = new DOMParser().parseFromString(content, 'text/html');
-                let isModified = false;
-
-                const containers = Array.from(doc.querySelectorAll('.hybrid-ad-container'));
-                containers.forEach(el => {
-                    const temp = doc.createElement('div');
-                    temp.innerHTML = newAdHtml;
-                    if (el.parentNode) {
-                        el.replaceWith(temp.firstElementChild!);
-                        isModified = true;
-                    }
-                });
-
-                if (isModified) {
-                    await updateFile(file.path, serializeHtml(doc), "Update Ads", sha);
-                    updatedCount++;
-                }
-            } catch (e) { console.warn(`Skipping ${file.name}`, e); }
-        }
-        onProgress(`تم تحديث الإعلانات في ${updatedCount} صفحة!`);
-    } catch (e: any) { onProgress("خطأ: " + e.message); }
-};
-
-// --- ABOUT PAGE LOGIC ---
-
-export const getAboutData = async (): Promise<AboutPageData> => {
-    try {
-        const { content } = await getFile('about.html');
-        const doc = new DOMParser().parseFromString(content, 'text/html');
-        
-        const findSection = (index: number) => {
-            const uls = doc.querySelectorAll('ul');
-            if (uls[index]) {
-                const titleEl = uls[index].previousElementSibling;
-                const title = titleEl?.tagName.match(/H[1-6]/) ? titleEl.textContent?.trim() || '' : '';
-                const items = Array.from(uls[index].querySelectorAll('li')).map(li => li.textContent?.replace(/[•-]/g, '').trim() || '');
-                return { title, items };
-            }
-            return { title: '', items: [] };
-        };
-
-        const sec1 = findSection(0);
-        const sec2 = findSection(1);
-
-        return {
-            title: doc.querySelector('h1')?.textContent?.trim() || 'من نحن',
-            bio: doc.querySelector('p')?.textContent?.trim() || '',
-            image: doc.querySelector('img.rounded-full')?.getAttribute('src') || '',
-            headerImage: '', 
-            profileSize: 'medium', telegramLink: '',
-            section1Title: sec1.title || 'القسم الأول', 
-            section1Items: sec1.items,
-            section2Title: sec2.title || 'القسم الثاني', 
-            section2Items: sec2.items,
-            listItems: []
-        };
-    } catch {
-        return {
-            title: '', bio: '', image: '', headerImage: '', 
-            profileSize: 'medium', telegramLink: '', 
-            section1Title: '', section1Items: [], 
-            section2Title: '', section2Items: [],
-            listItems: []
-        };
-    }
-};
-
-export const saveAboutData = async (data: AboutPageData, onProgress: (msg: string) => void) => {
-    onProgress("تحديث صفحة من نحن...");
-    try {
-        const { content, sha } = await getFile('about.html');
-        const doc = new DOMParser().parseFromString(content, 'text/html');
-
-        if (doc.querySelector('h1')) doc.querySelector('h1')!.textContent = data.title;
-        const bioP = doc.querySelector('.bg-white p') || doc.querySelector('main p');
-        if (bioP) bioP.textContent = data.bio;
-
-        const headerDiv = doc.querySelector('.header-bg') || doc.querySelector('div[class*="bg-gradient-to-r"]');
-        if (headerDiv && data.headerImage) {
-            headerDiv.classList.remove('bg-gradient-to-r', 'from-blue-700', 'to-blue-500');
-            headerDiv.setAttribute('style', `background-image: url('${data.headerImage}'); background-size: cover; background-position: center;`);
-        }
-
-        const profileImg = doc.querySelector('img.rounded-full');
-        if (profileImg) profileImg.setAttribute('src', data.image);
-
-        const updateSection = (index: number, title: string, items: string[], color: string) => {
-            const uls = doc.querySelectorAll('ul');
-            if (uls[index]) {
-                const titleEl = uls[index].previousElementSibling;
-                if (titleEl) titleEl.textContent = title;
-                uls[index].innerHTML = items.map(item => 
-                    `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${item}</li>`
-                ).join('');
-            }
-        };
-
-        updateSection(0, data.section1Title, data.section1Items, 'blue');
-        updateSection(1, data.section2Title, data.section2Items, 'purple');
-
-        await updateFile('about.html', serializeHtml(doc), "Update About Page", sha);
-        onProgress("تم الحفظ!");
-    } catch(e: any) {
-        throw new Error("Failed: " + e.message);
-    }
-};
-
-// --- SOCIAL LINKS ---
-export const updateSocialLinks = async (links: SocialLinks, onProgress: (msg: string) => void) => {
-    onProgress("جاري تحديث الروابط...");
-    try {
-        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
-        const files = await response.json();
-        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
-
-        let count = 0;
-        for (const file of htmlFiles) {
-            try {
-                const { content, sha } = await getFile(file.path);
-                const doc = new DOMParser().parseFromString(content, 'text/html');
-                let modified = false;
-
-                const updateHref = (domain: string, newUrl: string) => {
-                    if (!newUrl) return;
-                    const anchors = Array.from(doc.querySelectorAll('a'));
-                    anchors.forEach(a => {
-                        if (a.href.includes(domain)) {
-                            a.href = newUrl;
-                            modified = true;
-                        }
-                    });
-                };
-
-                updateHref('facebook.com', links.facebook);
-                updateHref('instagram.com', links.instagram);
-                updateHref('tiktok.com', links.tiktok);
-                updateHref('youtube.com', links.youtube);
-                updateHref('t.me', links.telegram);
-
-                if (modified) {
-                    await updateFile(file.path, serializeHtml(doc), "Update Social Links", sha);
-                    count++;
-                }
-            } catch(e) {}
-        }
-        onProgress(`تم تحديث الروابط في ${count} صفحة.`);
-    } catch (e: any) { throw new Error(e.message); }
-};
-
-export const getSocialLinks = async (): Promise<SocialLinks> => { 
-    try {
-        const { content } = await getFile(RepoConfig.INDEX_FILE);
-        const extract = (d: string) => {
-            const regex = new RegExp(`href=["'](https?:\\/\\/(?:www\\.)?${d}\\/[^"']+)["']`);
-            return content.match(regex)?.[1] || '';
-        };
-        return {
-            facebook: extract('facebook.com'), instagram: extract('instagram.com'),
-            tiktok: extract('tiktok.com'), youtube: extract('youtube.com'),
-            telegram: extract('t.me')
-        };
-    } catch { return {facebook:'',instagram:'',tiktok:'',youtube:'',telegram:''}; }
-};
-
-// --- GENERIC ---
-export const getMetadata = async (): Promise<{ data: MetadataRoot; sha: string }> => {
-  try {
-    const { content, sha } = await getFile(RepoConfig.METADATA_FILE);
-    const data = JSON.parse(content);
-    if (!data.articles) data.articles = [];
-    return { data, sha };
-  } catch (e) {
-    return { data: { name: 'TechTouch', description: 'CMS', articles: [] }, sha: '' };
-  }
-};
-
-export const saveMetadata = async (data: any, sha?: string) => {
-    await updateFile(RepoConfig.METADATA_FILE, JSON.stringify(data, null, 2), "Update metadata", sha);
-};
-
-export const getManagedArticles = async (): Promise<ArticleMetadata[]> => {
-    const { data } = await getMetadata();
-    return data.articles.map(a => ({
-        fileName: a.file, title: a.title, category: a.category as any, image: a.image, description: a.excerpt, link: a.file
-    }));
-};
-
-export const deleteArticle = async (fileName: string, onProgress: (msg: string) => void) => { 
-    onProgress("حذف الملفات...");
-    try { const { sha } = await getFile(fileName); await deleteFile(fileName, "Delete", sha); } catch(e) {}
-    await deleteCardFromFile(RepoConfig.INDEX_FILE, fileName);
-    await deleteCardFromFile(RepoConfig.ARTICLES_FILE, fileName);
-    const { data, sha } = await getMetadata();
-    data.articles = data.articles.filter(a => a.file !== fileName);
-    await saveMetadata(data, sha);
-    onProgress("تم الحذف!");
-};
-
-const deleteCardFromFile = async (filePath: string, href: string) => {
-    try {
-        const { content, sha } = await getFile(filePath);
-        const doc = new DOMParser().parseFromString(content, 'text/html');
-        const card = doc.querySelector(`a[href="${href}"]`);
-        if(card) {
-            card.remove();
-            await updateFile(filePath, serializeHtml(doc), `Remove card ${href}`, sha);
-        }
-    } catch {}
-};
+// --- OTHER FEATURES ---
 
 export const parseTicker = async (): Promise<TickerData> => {
     try {
@@ -833,44 +612,52 @@ export const getSiteImages = async (): Promise<string[]> => {
     } catch { return []; }
 };
 
+/**
+ * Optimized Image Upload using FileReader for binary handling.
+ * This is simpler and uses less memory than manual byte loops.
+ */
 export const uploadImage = async (file: File, onProgress: (msg: string) => void, type: 'article' | 'profile' = 'article'): Promise<string> => {
     onProgress("جاري الرفع...");
     
-    // 1. Generate Unique Path
-    const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const ext = file.name.split('.').pop() || 'jpg';
-    const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
-    const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                // reader.result is "data:image/jpeg;base64,....."
+                const result = reader.result as string;
+                // We strip the prefix to get the raw base64 of the binary
+                const base64Content = result.split(',')[1];
+                
+                const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                const ext = file.name.split('.').pop() || 'jpg';
+                const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
+                const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
 
-    // 2. Read as ArrayBuffer (Binary)
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    const len = bytes.byteLength;
-    
-    // Using a chunked approach or loop for binary string construction
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    
-    // 3. Convert to Base64 (Required for GitHub API transport ONLY)
-    // The API will decode this and store the raw binary file.
-    const content = window.btoa(binary);
+                // Check for existing SHA
+                let sha;
+                try {
+                    const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
+                    const json = await existing.json();
+                    sha = json.sha;
+                } catch {}
 
-    // 4. Check for existing SHA (to allow overwrite)
-    let sha;
-    try {
-        const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
-        if (existing.ok) sha = (await existing.json()).sha;
-    } catch {}
-
-    // 5. Upload
-    // We pass 'true' for isBase64 so updateFile doesn't try to re-encode or use UTF-8 logic
-    await updateFile(path, content, "Upload Image", sha, true);
-
-    return `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
+                // Upload with isBase64 = true
+                await updateFile(path, base64Content, "Upload Image", sha, true);
+                
+                const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
+                resolve(url);
+            } catch (e: any) {
+                reject(e);
+            }
+        };
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+    });
 };
 
+/**
+ * More specific avatar update to prevent false positives.
+ */
 export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
     onProgress("تحديث الروابط في HTML...");
      try {
@@ -891,13 +678,15 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
                     const alt = img.getAttribute('alt') || '';
-                    if (
+                    
+                    // Strict check for profile image candidates
+                    const isProfileImage = 
                         src.includes('me.jpg') || 
-                        src.includes('profile') || 
-                        img.classList.contains('rounded-full') || 
-                        (alt && alt.toLowerCase().includes('profile')) ||
-                        (alt && alt.includes('كنان'))
-                    ) {
+                        src.includes('profile.') ||
+                        (alt && alt.includes('كنان')) ||
+                        (alt && alt.toLowerCase().includes('profile'));
+
+                    if (isProfileImage) {
                         img.setAttribute('src', newSrc);
                         modified = true;
                     }
@@ -909,31 +698,199 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
      } catch(e:any) { onProgress(e.message); }
 };
 
+export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotId: string, onProgress: (msg: string) => void) => {
+    onProgress("جاري فحص ملفات الموقع...");
+    try {
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+        const files = await response.json();
+        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
+        
+        let updatedCount = 0;
+        const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
+        
+        const newAdHtml = validCustomImage
+            ? CUSTOM_AD_TEMPLATE(imageUrl, linkUrl) 
+            : HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlotId);
+
+        for (const file of htmlFiles) {
+            try {
+                // Rate limit protection - small delay
+                await new Promise(r => setTimeout(r, 100));
+                
+                onProgress(`تحديث ${file.name}...`);
+                const { content, sha } = await getFile(file.path);
+                const doc = new DOMParser().parseFromString(content, 'text/html');
+                let isModified = false;
+
+                const containers = Array.from(doc.querySelectorAll('.hybrid-ad-container'));
+                if (containers.length > 0) {
+                    containers.forEach(el => {
+                        const temp = doc.createElement('div');
+                        temp.innerHTML = newAdHtml;
+                        if (el.parentNode) {
+                            el.replaceWith(temp.firstElementChild!);
+                            isModified = true;
+                        }
+                    });
+                    
+                    if (isModified) {
+                        await updateFile(file.path, serializeHtml(doc), "Update Ads", sha);
+                        updatedCount++;
+                    }
+                }
+            } catch (e) { console.warn(`Skipping ${file.name}`, e); }
+        }
+        onProgress(`تم تحديث الإعلانات في ${updatedCount} صفحة!`);
+    } catch (e: any) { onProgress("خطأ: " + e.message); }
+};
+
+const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
+<div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
+    <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
+    <a href="${linkUrl || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
+        <img src="${imageUrl}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
+    </a>
+</div>`;
+
+// ... (About, Social, and GetArticleDetails functions remain largely the same, included below for completeness) ...
+
+export const getAboutData = async (): Promise<AboutPageData> => {
+    try {
+        const { content } = await getFile('about.html');
+        const doc = new DOMParser().parseFromString(content, 'text/html');
+        const findSection = (index: number) => {
+            const uls = doc.querySelectorAll('ul');
+            if (uls[index]) {
+                const titleEl = uls[index].previousElementSibling;
+                const title = titleEl?.tagName.match(/H[1-6]/) ? titleEl.textContent?.trim() || '' : '';
+                const items = Array.from(uls[index].querySelectorAll('li')).map(li => li.textContent?.replace(/[•-]/g, '').trim() || '');
+                return { title, items };
+            }
+            return { title: '', items: [] };
+        };
+        const sec1 = findSection(0);
+        const sec2 = findSection(1);
+        return {
+            title: doc.querySelector('h1')?.textContent?.trim() || 'من نحن',
+            bio: doc.querySelector('p')?.textContent?.trim() || '',
+            image: doc.querySelector('img.rounded-full')?.getAttribute('src') || '',
+            headerImage: '', profileSize: 'medium', telegramLink: '',
+            section1Title: sec1.title || 'القسم الأول', section1Items: sec1.items,
+            section2Title: sec2.title || 'القسم الثاني', section2Items: sec2.items,
+            listItems: []
+        };
+    } catch { return { title: '', bio: '', image: '', headerImage: '', profileSize: 'medium', telegramLink: '', section1Title: '', section1Items: [], section2Title: '', section2Items: [], listItems: [] }; }
+};
+
+export const saveAboutData = async (data: AboutPageData, onProgress: (msg: string) => void) => {
+    onProgress("تحديث صفحة من نحن...");
+    try {
+        const { content, sha } = await getFile('about.html');
+        const doc = new DOMParser().parseFromString(content, 'text/html');
+        if (doc.querySelector('h1')) doc.querySelector('h1')!.textContent = data.title;
+        const bioP = doc.querySelector('.bg-white p') || doc.querySelector('main p');
+        if (bioP) bioP.textContent = data.bio;
+        const headerDiv = doc.querySelector('.header-bg') || doc.querySelector('div[class*="bg-gradient-to-r"]');
+        if (headerDiv && data.headerImage) {
+            headerDiv.classList.remove('bg-gradient-to-r', 'from-blue-700', 'to-blue-500');
+            headerDiv.setAttribute('style', `background-image: url('${data.headerImage}'); background-size: cover; background-position: center;`);
+        }
+        const profileImg = doc.querySelector('img.rounded-full');
+        if (profileImg) profileImg.setAttribute('src', data.image);
+        const updateSection = (index: number, title: string, items: string[], color: string) => {
+            const uls = doc.querySelectorAll('ul');
+            if (uls[index]) {
+                const titleEl = uls[index].previousElementSibling;
+                if (titleEl) titleEl.textContent = title;
+                uls[index].innerHTML = items.map(item => `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${item}</li>`).join('');
+            }
+        };
+        updateSection(0, data.section1Title, data.section1Items, 'blue');
+        updateSection(1, data.section2Title, data.section2Items, 'purple');
+        await updateFile('about.html', serializeHtml(doc), "Update About Page", sha);
+        onProgress("تم الحفظ!");
+    } catch(e: any) { throw new Error("Failed: " + e.message); }
+};
+
+export const updateSocialLinks = async (links: SocialLinks, onProgress: (msg: string) => void) => {
+    onProgress("جاري تحديث الروابط...");
+    try {
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+        const files = await response.json();
+        const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
+        let count = 0;
+        for (const file of htmlFiles) {
+            try {
+                const { content, sha } = await getFile(file.path);
+                const doc = new DOMParser().parseFromString(content, 'text/html');
+                let modified = false;
+                const updateHref = (domain: string, newUrl: string) => {
+                    if (!newUrl) return;
+                    Array.from(doc.querySelectorAll('a')).forEach(a => {
+                        if (a.href.includes(domain)) { a.href = newUrl; modified = true; }
+                    });
+                };
+                updateHref('facebook.com', links.facebook);
+                updateHref('instagram.com', links.instagram);
+                updateHref('tiktok.com', links.tiktok);
+                updateHref('youtube.com', links.youtube);
+                updateHref('t.me', links.telegram);
+                if (modified) { await updateFile(file.path, serializeHtml(doc), "Update Social Links", sha); count++; }
+            } catch(e) {}
+        }
+        onProgress(`تم تحديث الروابط في ${count} صفحة.`);
+    } catch (e: any) { throw new Error(e.message); }
+};
+
+export const getSocialLinks = async (): Promise<SocialLinks> => { 
+    try {
+        const { content } = await getFile(RepoConfig.INDEX_FILE);
+        const extract = (d: string) => {
+            const regex = new RegExp(`href=["'](https?:\\/\\/(?:www\\.)?${d}\\/[^"']+)["']`);
+            return content.match(regex)?.[1] || '';
+        };
+        return { facebook: extract('facebook.com'), instagram: extract('instagram.com'), tiktok: extract('tiktok.com'), youtube: extract('youtube.com'), telegram: extract('t.me') };
+    } catch { return {facebook:'',instagram:'',tiktok:'',youtube:'',telegram:''}; }
+};
+
+export const getMetadata = async (): Promise<{ data: MetadataRoot; sha: string }> => {
+  try {
+    const { content, sha } = await getFile(RepoConfig.METADATA_FILE);
+    const data = JSON.parse(content);
+    if (!data.articles) data.articles = [];
+    return { data, sha };
+  } catch (e) {
+    return { data: { name: 'TechTouch', description: 'CMS', articles: [] }, sha: '' };
+  }
+};
+
+export const saveMetadata = async (data: any, sha?: string) => {
+    await updateFile(RepoConfig.METADATA_FILE, JSON.stringify(data, null, 2), "Update metadata", sha);
+};
+
+export const getManagedArticles = async (): Promise<ArticleMetadata[]> => {
+    const { data } = await getMetadata();
+    return data.articles.map(a => ({ fileName: a.file, title: a.title, category: a.category as any, image: a.image, description: a.excerpt, link: a.file }));
+};
+
 export const getArticleDetails = async (fileName: string): Promise<ArticleContent> => {
     const { content } = await getFile(fileName);
     const doc = new DOMParser().parseFromString(content, 'text/html');
-    
-    // Extract main text from standard elements
     let mainText = '';
     doc.querySelectorAll('.prose p, .prose h2, .prose h3').forEach(el => {
         if(el.tagName === 'H2') mainText += `## ${el.textContent}\n`;
         else if(el.tagName === 'H3') mainText += `### ${el.textContent}\n`;
         else mainText += `${el.textContent}\n`;
     });
-
-    // Extract Video URL from iframe
     const videoFrame = doc.querySelector('.video-container iframe');
     let videoUrl = '';
     if (videoFrame) {
         const src = videoFrame.getAttribute('src') || '';
-        // Reconstruct common URL
         if (src.includes('/embed/')) {
             const id = src.split('/embed/')[1].split('?')[0];
             videoUrl = `https://www.youtube.com/watch?v=${id}`;
         }
     }
-
-    // Extract Wrapped Link (Button)
     const btnLink = doc.querySelector('.btn-wrapped-link');
     let downloadLink = '';
     let downloadText = '';
@@ -941,7 +898,6 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
         downloadLink = btnLink.getAttribute('href') || '';
         downloadText = btnLink.querySelector('span')?.textContent || '';
     }
-
     return {
         fileName,
         title: doc.querySelector('h1')?.textContent || '',
