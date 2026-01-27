@@ -73,7 +73,8 @@ export const getFile = async (path: string): Promise<{ content: string; sha: str
 };
 
 export const updateFile = async (path: string, content: string, message: string, sha?: string, isBase64: boolean = false): Promise<void> => {
-  // If isBase64 is true, we use content as is. Otherwise we encode it.
+  // If isBase64 is true, we use content as is. Otherwise we encode it using UTF-8 safe method.
+  // GitHub API requires content to be Base64 encoded string.
   const body: any = { message, content: isBase64 ? content : toBase64(content) };
   if (sha) body.sha = sha;
   await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
@@ -260,9 +261,12 @@ const insertCardIntoFile = async (filePath: string, insertions: {selector: strin
         let modified = false;
 
         insertions.forEach(ins => {
+            // Find the container
             const container = doc.querySelector(ins.selector);
             if (container) {
+                // Determine where to insert (try to find a .grid inside, or use the container itself)
                 const target = container.classList.contains('grid') ? container : container.querySelector('.grid') || container;
+                
                 const temp = doc.createElement('div');
                 temp.innerHTML = ins.html;
                 const newNode = temp.firstElementChild;
@@ -835,36 +839,40 @@ export const getSiteImages = async (): Promise<string[]> => {
 
 export const uploadImage = async (file: File, onProgress: (msg: string) => void, type: 'article' | 'profile' = 'article'): Promise<string> => {
     onProgress("جاري الرفع...");
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = async () => {
-            try {
-                // Get raw base64 string and ensure it's clean
-                let content = (reader.result as string).split(',')[1];
-                // Remove newlines or whitespace that might corrupt the binary logic on GitHub's side
-                content = content.replace(/\s/g, '');
-                
-                // Unique Filename Generation: timestamp + random string
-                const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-                const ext = file.name.split('.').pop() || 'jpg';
-                const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
-                
-                const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
-                
-                let sha;
-                try {
-                    const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
-                    if(existing.ok) sha = (await existing.json()).sha;
-                } catch {}
+    
+    // 1. Generate Unique Path
+    const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const ext = file.name.split('.').pop() || 'jpg';
+    const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
+    const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
 
-                // Send true for isBase64 to skip double encoding and pass raw content
-                await updateFile(path, content, "Upload Image", sha, true); 
-                const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
-                resolve(url);
-            } catch (e) { reject(e); }
-        };
-        reader.readAsDataURL(file);
-    });
+    // 2. Read as ArrayBuffer (Binary)
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const len = bytes.byteLength;
+    
+    // Using a chunked approach or loop for binary string construction
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    
+    // 3. Convert to Base64 (Required for GitHub API transport ONLY)
+    // The API will decode this and store the raw binary file.
+    const content = window.btoa(binary);
+
+    // 4. Check for existing SHA (to allow overwrite)
+    let sha;
+    try {
+        const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
+        if (existing.ok) sha = (await existing.json()).sha;
+    } catch {}
+
+    // 5. Upload
+    // We pass 'true' for isBase64 so updateFile doesn't try to re-encode or use UTF-8 logic
+    await updateFile(path, content, "Upload Image", sha, true);
+
+    return `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
 };
 
 export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
