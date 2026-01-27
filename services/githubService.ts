@@ -171,18 +171,16 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     
     let bodyContent = '';
     
-    // 1. Video (Embedded Iframe)
+    // 1. Video (Embedded Iframe) - Guide Style
     if (data.videoUrl) {
         const videoId = getYouTubeId(data.videoUrl);
         if (videoId) {
             bodyContent += `
-<div class="video-container my-8 relative w-full aspect-video rounded-xl overflow-hidden shadow-lg">
+<div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
     <iframe 
         src="https://www.youtube.com/embed/${videoId}" 
         title="${data.title}" 
         class="absolute inset-0 w-full h-full"
-        frameborder="0" 
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
         allowfullscreen>
     </iframe>
 </div>\n`;
@@ -211,7 +209,7 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
         .replace(/{{FILENAME}}/g, newFileName)
         .replace(/{{IMAGE}}/g, data.image)
         .replace(/{{DATE}}/g, today)
-        .replace(/{{CATEGORY_LABEL}}/g, CATEGORIES.find(c => c.id === data.category)?.label || data.category)
+        // .replace(/{{CATEGORY_LABEL}}/g, CATEGORIES.find(c => c.id === data.category)?.label || data.category) // Not used in new base template
         .replace('{{AD_SLOT_BOTTOM}}', adHtml)
         .replace('{{CONTENT_BODY}}', bodyContent);
 
@@ -322,13 +320,11 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
         const videoId = getYouTubeId(data.videoUrl);
         if (videoId) {
             bodyContent += `
-<div class="video-container my-8 relative w-full aspect-video rounded-xl overflow-hidden shadow-lg">
+<div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
     <iframe 
         src="https://www.youtube.com/embed/${videoId}" 
         title="${data.title}" 
         class="absolute inset-0 w-full h-full"
-        frameborder="0" 
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
         allowfullscreen>
     </iframe>
 </div>\n`;
@@ -472,7 +468,7 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
 };
 
 function parseCard(card: Element): DirectoryItem {
-    const colorDiv = card.querySelector('div[class*="w-10"]'); 
+    const colorDiv = card.querySelector('div[class*="w-12"]'); 
     let colorClass = 'bg-blue-600';
     
     if (colorDiv) {
@@ -482,7 +478,7 @@ function parseCard(card: Element): DirectoryItem {
     
     return {
         title: card.querySelector('h3')?.textContent?.trim() || 'No Title',
-        description: card.querySelector('.marquee-text-content')?.textContent?.trim() || card.querySelector('p')?.textContent?.trim() || '',
+        description: card.querySelector('p')?.textContent?.trim() || '',
         link: card.getAttribute('href') || '#',
         icon: card.querySelector('i')?.getAttribute('data-lucide') || 'globe',
         colorClass: colorClass

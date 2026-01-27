@@ -13,7 +13,7 @@ export const HYBRID_AD_TEMPLATE = (imageUrl: string, linkUrl: string, slotId: st
 <div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
     <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
     
-    <!-- 1. Google AdSense (Hidden fallback logic handled by CSS in real site usually, but here we place it) -->
+    <!-- 1. Google AdSense -->
     <div class="relative z-10 w-full min-h-[280px] flex justify-center items-center">
         <ins class="adsbygoogle"
              style="display:block; width:100%; min-width:300px;"
@@ -30,118 +30,108 @@ export const HYBRID_AD_TEMPLATE = (imageUrl: string, linkUrl: string, slotId: st
     </a>
 </div>`;
 
-// Template for Download/External Link Button
+// Template from Guide Section 3.2 (Download Button)
 export const DOWNLOAD_BUTTON_TEMPLATE = (url: string, text: string) => `
-<div class="my-10 flex justify-center">
-    <a href="${url}" target="_blank" class="btn-wrapped-link group relative inline-flex items-center gap-3 bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-bold text-lg transition-all shadow-lg hover:shadow-blue-500/40 hover:-translate-y-1 overflow-hidden">
-        <div class="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-download animate-bounce"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+<div class="my-12 flex justify-center">
+    <a href="${url}" target="_blank" class="btn-wrapped-link w-full md:w-auto min-w-[250px] text-center bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all shadow-lg hover:shadow-blue-500/40 flex items-center justify-center gap-2">
+        <i data-lucide="download" class="w-5 h-5"></i>
         <span>${text}</span>
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-left opacity-0 group-hover:opacity-100 transition-opacity -ml-2 group-hover:ml-0"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
     </a>
 </div>`;
 
 // Template from Guide Section 2 (Article Card)
 export const ARTICLE_CARD_TEMPLATE = (article: {filename: string, image: string, category: string, title: string, description: string}) => `
-    <a href="${article.filename}" class="group h-full">
-        <div class="bg-white dark:bg-gray-800 rounded-3xl overflow-hidden shadow-sm border border-gray-100 dark:border-gray-700 hover:shadow-xl hover:-translate-y-1 transition-all h-full flex flex-col relative">
-            <div class="h-52 overflow-hidden relative">
-                <img src="${article.image}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt="${article.title}" />
-                <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-60"></div>
-                <div class="absolute top-4 right-4 bg-blue-600 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg z-10 flex items-center gap-1">${article.category}</div>
-            </div>
-            <div class="p-5 flex-1 flex flex-col">
-                <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2 line-clamp-2">${article.title}</h3>
-                <p class="text-gray-500 dark:text-gray-400 text-sm line-clamp-2">${article.description}</p>
+<a href="${article.filename}" class="group block w-full transform transition-all duration-300 hover:-translate-y-1">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden shadow-sm hover:shadow-lg border border-gray-100 dark:border-gray-700 flex flex-col h-full">
+        <div class="relative w-full aspect-video overflow-hidden bg-gray-100 dark:bg-gray-700">
+            <img src="${article.image}" class="w-full h-full object-cover" alt="${article.title}" loading="lazy" />
+            <div class="absolute top-3 right-3 bg-blue-600 text-white text-[10px] font-bold px-2.5 py-1 rounded-full shadow-sm z-10 flex items-center gap-1">
+                <i data-lucide="file-text" class="w-3 h-3"></i> <span>${article.category}</span>
             </div>
         </div>
-    </a>`;
-
-// Template from Guide Section 5 (Directory Item)
-export const DIRECTORY_ITEM_TEMPLATE = (item: {link: string, title: string, description: string, icon: string, colorClass: string}) => `
-<a href="${item.link}" target="_blank" class="block bg-white dark:bg-gray-800 rounded-lg p-2 shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750 transition-all group overflow-hidden">
-    <div class="flex items-center gap-3 h-full">
-        <div class="w-10 h-10 ${item.colorClass} rounded-md flex items-center justify-center shrink-0 shadow-sm">
-             <i data-lucide="${item.icon}" class="w-5 h-5 text-white"></i>
-        </div>
-        <div class="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
-            <h3 class="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">${item.title}</h3>
-            <div class="marquee-text-wrap w-full">
-                <p class="text-[11px] text-gray-500 dark:text-gray-400 marquee-text-content">${item.description}</p>
-            </div>
-        </div>
-        <div class="text-gray-400 group-hover:text-blue-600 shrink-0">
-            <i data-lucide="chevron-left" class="w-4 h-4"></i>
+        <div class="p-4 flex flex-col flex-1">
+            <h3 class="text-base font-bold text-gray-900 dark:text-white mb-2 leading-snug group-hover:text-blue-600 transition-colors">${article.title}</h3>
+            <p class="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 leading-relaxed">${article.description}</p>
         </div>
     </div>
 </a>`;
 
-// Basic HTML Skeleton for new articles
+// Template from Guide Section 2 (Directory/Tools Item)
+export const DIRECTORY_ITEM_TEMPLATE = (item: {link: string, title: string, description: string, icon: string, colorClass: string}) => `
+<a href="${item.link}" target="_blank" class="block bg-white dark:bg-gray-800 rounded-xl p-3 shadow-sm border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750 transition-all group">
+    <div class="flex items-center gap-4 h-full">
+        <div class="w-12 h-12 ${item.colorClass} rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+            <i data-lucide="${item.icon}" class="w-6 h-6 text-white"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+            <h3 class="font-bold text-gray-900 dark:text-white text-sm mb-1">${item.title}</h3>
+            <p class="text-xs text-gray-500 dark:text-gray-400 truncate">${item.description}</p>
+        </div>
+        <div class="text-gray-300 group-hover:text-blue-600 shrink-0 transition-colors">
+            <i data-lucide="chevron-left" class="w-5 h-5"></i>
+        </div>
+    </div>
+</a>`;
+
+// Template from Guide Section 1 (Base Article)
 export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{TITLE}} | TechTouch</title>
     <meta name="description" content="{{DESCRIPTION}}">
     <link rel="canonical" href="https://kinanmjeed88.github.io/Kinan-touch-AD-google/{{FILENAME}}">
     
-    <!-- Meta Tags for Social Media -->
+    <!-- Meta Tags -->
     <meta property="og:title" content="{{TITLE}}">
     <meta property="og:description" content="{{DESCRIPTION}}">
     <meta property="og:image" content="{{IMAGE}}">
     <meta property="og:url" content="https://kinanmjeed88.github.io/Kinan-touch-AD-google/{{FILENAME}}">
     <meta name="twitter:card" content="summary_large_image">
 
-    <!-- Styles -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = { darkMode: 'class', theme: { extend: { fontFamily: { sans: ['Segoe UI', 'sans-serif'] } } } }
+    </script>
     <link rel="stylesheet" href="assets/css/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
-<body class="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-['Cairo'] transition-colors duration-300">
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200 flex flex-col min-h-screen">
+    
+    <!-- الهيدر -->
+    <header class="w-full bg-white dark:bg-gray-900 shadow-sm border-b border-gray-200 dark:border-gray-800 sticky top-0 z-50 h-16 flex items-center justify-between px-4">
+        <div class="flex items-center gap-3">
+             <a href="index.html" class="text-xl font-black text-blue-600 dark:text-blue-400">TechTouch</a>
+        </div>
+        <a href="index.html" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><i data-lucide="arrow-right"></i></a>
+    </header>
 
-    <!-- Header Placeholder -->
-    <div id="header-placeholder"></div>
+    <main class="max-w-4xl mx-auto px-4 py-8 animate-fade-in">
+        <!-- العنوان والتاريخ -->
+        <header class="mb-8">
+            <h1 class="text-3xl font-extrabold mb-4">{{TITLE}}</h1>
+            <div class="text-sm text-gray-500"><i data-lucide="calendar" class="inline w-4 h-4"></i> {{DATE}}</div>
+        </header>
 
-    <main class="container mx-auto px-4 py-8 max-w-4xl">
-        <article class="bg-white dark:bg-slate-800 rounded-2xl shadow-lg overflow-hidden">
-            <!-- Article Image -->
-            <div class="relative w-full aspect-video">
-                <img id="main-image" src="{{IMAGE}}" alt="{{TITLE}}" class="w-full h-full object-cover">
-                <div class="absolute bottom-0 right-0 bg-blue-600 text-white px-4 py-1 rounded-tl-lg font-bold">
-                    {{CATEGORY_LABEL}}
-                </div>
-            </div>
+        <!-- الصورة الرئيسية -->
+        <div class="mb-8 rounded-2xl overflow-hidden shadow-lg">
+            <img id="main-image" src="{{IMAGE}}" alt="{{TITLE}}" class="w-full object-cover max-h-[500px]" />
+        </div>
 
-            <div class="p-6 md:p-8">
-                <!-- Title & Meta -->
-                <h1 class="text-2xl md:text-4xl font-bold mb-4 leading-tight">{{TITLE}}</h1>
-                <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400 mb-8 pb-4 border-b border-gray-200 dark:border-gray-700">
-                    <span class="flex items-center gap-1">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                        {{DATE}}
-                    </span>
-                    <span class="flex items-center gap-1">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-                        Admin
-                    </span>
-                </div>
-
-                <!-- Content -->
-                <div class="prose prose-lg dark:prose-invert max-w-none leading-relaxed">
-                    {{CONTENT_BODY}}
-                </div>
-
-                <!-- Bottom Ad Slot -->
-                {{AD_SLOT_BOTTOM}}
-            </div>
+        <!-- محتوى المقال -->
+        <article class="prose prose-lg dark:prose-invert max-w-none">
+            {{CONTENT_BODY}}
+            
+            {{AD_SLOT_BOTTOM}}
         </article>
     </main>
 
-    <!-- Footer Placeholder -->
-    <div id="footer-placeholder"></div>
-
-    <!-- Scripts -->
-    <script src="assets/js/main.js"></script>
+    <script src="assets/js/app.js"></script>
+    <script>
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    </script>
 </body>
 </html>`;
