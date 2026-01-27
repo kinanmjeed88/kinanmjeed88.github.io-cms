@@ -363,14 +363,17 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
             category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
         });
 
-        // 1. Update in 'All' Tab (Preserve position if possible)
-        const allTabCard = indexDoc.querySelector(`#tab-all a[href="${oldFileName}"]`);
+        // 1. Update in 'All' Tab (Use href includes matching to be safe)
+        // Try precise match first, then fallback to filename match
+        let allTabCard = indexDoc.querySelector(`#tab-all a[href="${oldFileName}"]`);
+        if (!allTabCard) allTabCard = indexDoc.querySelector(`#tab-all a[href*="${oldFileName}"]`);
+
         if (allTabCard) {
             const temp = indexDoc.createElement('div');
             temp.innerHTML = cardHtml;
             allTabCard.replaceWith(temp.firstElementChild!);
         } else {
-            // If missing, insert at top
+            // If missing, insert at top of All Tab
             const allGrid = indexDoc.querySelector('#tab-all .grid') || indexDoc.querySelector('#tab-all');
             if (allGrid) {
                 const temp = indexDoc.createElement('div');
@@ -383,7 +386,8 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
         // 2. Handle Categories (Move if category changed)
         CATEGORIES.forEach(cat => {
             const tabId = `#tab-${cat.id}`;
-            const cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`);
+            let cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`);
+            if (!cardInTab) cardInTab = indexDoc.querySelector(`${tabId} a[href*="${oldFileName}"]`);
             
             if (cat.id === data.category) {
                 // Should be here
@@ -431,7 +435,8 @@ const replaceCardInFile = async (filePath: string, href: string, newHtml: string
     try {
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const cards = Array.from(doc.querySelectorAll(`a[href="${href}"]`));
+        // Use inclusive matching for href
+        const cards = Array.from(doc.querySelectorAll(`a[href*="${href}"]`));
         if (cards.length > 0) {
             const temp = doc.createElement('div');
             temp.innerHTML = newHtml;
@@ -834,8 +839,10 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
         const reader = new FileReader();
         reader.onload = async () => {
             try {
-                // Get raw base64 string
-                const content = (reader.result as string).split(',')[1];
+                // Get raw base64 string and ensure it's clean
+                let content = (reader.result as string).split(',')[1];
+                // Remove newlines or whitespace that might corrupt the binary logic on GitHub's side
+                content = content.replace(/\s/g, '');
                 
                 // Unique Filename Generation: timestamp + random string
                 const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -850,7 +857,7 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                     if(existing.ok) sha = (await existing.json()).sha;
                 } catch {}
 
-                // Send true for isBase64 to skip double encoding
+                // Send true for isBase64 to skip double encoding and pass raw content
                 await updateFile(path, content, "Upload Image", sha, true); 
                 const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
                 resolve(url);
