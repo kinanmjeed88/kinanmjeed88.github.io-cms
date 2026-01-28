@@ -11,19 +11,13 @@ export const getGithubToken = () => GITHUB_TOKEN;
 
 // --- Helpers ---
 
-/**
- * Validates URLs to prevent JavaScript injection via attributes (e.g. href="javascript:...")
- * Allows http, https, relative paths, and mailto.
- */
 const sanitizeUrl = (url: string): string => {
     if (!url) return '';
-    // Allow http://, https://, / (relative), ./ (relative), mailto:
-    // This rejects javascript:, vbscript:, data:, etc.
     const safePattern = /^(https?:\/\/|\/|\.\/|mailto:|#)/i;
     if (safePattern.test(url.trim())) {
         return url.trim();
     }
-    return '#'; // Fallback for unsafe URLs
+    return '#';
 };
 
 const toBase64 = (str: string): string => {
@@ -42,17 +36,12 @@ const fromBase64 = (str: string): string => {
   );
 };
 
-// Note: This serializes the entire DOM, potentially changing formatting.
-// This is acceptable for a CMS-controlled static site to maintain DOM integrity.
 const serializeHtml = (doc: Document): string => {
     const doctype = "<!DOCTYPE html>";
     const html = doc.documentElement.outerHTML;
     return `${doctype}\n${html}`;
 };
 
-/**
- * Basic HTML escaping to prevent XSS attacks in text content.
- */
 const escapeHtml = (unsafe: string): string => {
     return unsafe
         .replace(/&/g, "&amp;")
@@ -62,14 +51,11 @@ const escapeHtml = (unsafe: string): string => {
         .replace(/'/g, "&#039;");
 };
 
-/**
- * Encodes file path segments to ensure valid URL (handles spaces, special chars)
- */
 const encodePath = (path: string): string => {
     return path.split('/').map(encodeURIComponent).join('/');
 };
 
-// --- TEMPLATES (Using Sanitizers) ---
+// --- TEMPLATES ---
 
 const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
 <div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
@@ -90,43 +76,29 @@ const getHeaders = () => {
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Robust Fetch with Retry-After Header & Strict 403 Handling
- */
 const fetchGitHub = async (url: string, options: RequestInit = {}, retries = 3, backoff = 1000) => {
     try {
         const response = await fetch(url, options);
-        
-        // Handle Rate Limiting (403 or 429)
         if (response.status === 403 || response.status === 429) {
-            // Check specific rate limit headers to distinguish from Permission Denied (403)
             const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
             const isRateLimit = rateLimitRemaining && parseInt(rateLimitRemaining) === 0;
-            
-            // If it's a 429 (Too Many Requests) OR a 403 caused strictly by Rate Limit
             if (response.status === 429 || isRateLimit) {
                 if (retries > 0) {
                     const retryAfter = response.headers.get('retry-after');
                     let waitTime = backoff;
-                    
                     if (retryAfter) {
                         const seconds = parseInt(retryAfter, 10);
-                        if (!isNaN(seconds)) {
-                            waitTime = (seconds * 1000) + 500;
-                        }
+                        if (!isNaN(seconds)) waitTime = (seconds * 1000) + 500;
                     }
-
                     console.warn(`Rate limited. Retrying in ${waitTime}ms...`);
                     await wait(waitTime);
                     return fetchGitHub(url, options, retries - 1, backoff * 2);
                 }
             } else if (response.status === 403) {
-                 // If 403 but NOT a rate limit, it's a permission error. Do not retry.
                  const body = await response.json().catch(() => ({}));
                  throw new Error(`Permission Denied (403). Check Token Scopes. ${body.message || ''}`);
             }
         }
-
         if (!response.ok) {
             let errMsg = `GitHub Error ${response.status}: ${response.statusText}`;
             try {
@@ -143,7 +115,6 @@ const fetchGitHub = async (url: string, options: RequestInit = {}, retries = 3, 
 
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
 
-// Helper to extract YouTube ID
 const getYouTubeId = (url: string): string | null => {
     if (!url) return null;
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -180,14 +151,8 @@ const generateSlug = (title: string): string => {
         .replace(/\s+/g, '-')
         .replace(/[^\w\u0600-\u06FF\-]+/g, '') 
         .toLowerCase();
-    
-    slug = slug.replace(/-+/g, '-');
-    slug = slug.replace(/^-+|-+$/g, '');
-
-    if (!slug || slug.length < 2) {
-        slug = `post-${Date.now()}`;
-    }
-    
+    slug = slug.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+    if (!slug || slug.length < 2) slug = `post-${Date.now()}`;
     return slug;
 };
 
@@ -200,29 +165,19 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
         if (videoId) {
             bodyContent += `
 <div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
-    <iframe 
-        src="https://www.youtube.com/embed/${videoId}" 
-        title="${escapeHtml(data.title)}" 
-        class="absolute inset-0 w-full h-full"
-        allowfullscreen>
-    </iframe>
+    <iframe src="https://www.youtube.com/embed/${videoId}" title="${escapeHtml(data.title)}" class="absolute inset-0 w-full h-full" allowfullscreen></iframe>
 </div>\n`;
         }
     }
 
-    // 2. Main Content (Sanitized)
+    // 2. Main Content
     const lines = data.mainText.split('\n').filter(p => p.trim());
     lines.forEach(line => {
-        // Markdown headers supported, but content is escaped
         if (line.startsWith('###')) {
-            const content = line.replace('###', '').trim();
-            bodyContent += `<h3>${escapeHtml(content)}</h3>`;
-        }
-        else if (line.startsWith('##')) {
-            const content = line.replace('##', '').trim();
-            bodyContent += `<h2>${escapeHtml(content)}</h2>`;
-        }
-        else {
+            bodyContent += `<h3>${escapeHtml(line.replace('###', '').trim())}</h3>`;
+        } else if (line.startsWith('##')) {
+            bodyContent += `<h2>${escapeHtml(line.replace('##', '').trim())}</h2>`;
+        } else {
             bodyContent += `<p>${escapeHtml(line)}</p>`;
         }
     });
@@ -230,7 +185,6 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
     // 3. Download Button
     if (data.downloadLink) {
         const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
-        // Strict URL sanitization for href
         bodyContent += DOWNLOAD_BUTTON_TEMPLATE(sanitizeUrl(data.downloadLink), escapeHtml(btnText));
     }
 
@@ -240,7 +194,7 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
         .replace(/{{TITLE}}/g, escapeHtml(data.title))
         .replace(/{{DESCRIPTION}}/g, escapeHtml(data.description))
         .replace(/{{FILENAME}}/g, fileName)
-        .replace(/{{IMAGE}}/g, sanitizeUrl(data.image)) // Strict attribute sanitization
+        .replace(/{{IMAGE}}/g, sanitizeUrl(data.image))
         .replace(/{{DATE}}/g, today)
         .replace('{{AD_SLOT_BOTTOM}}', adHtml)
         .replace('{{CONTENT_BODY}}', bodyContent);
@@ -256,7 +210,7 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
         files = await response.json();
     } catch (e: any) {
         if (e.message.includes('404')) {
-            throw new Error(`لم يتم العثور على المستودع "${RepoConfig.OWNER}/${RepoConfig.NAME}". يرجى التأكد من الاسم في الإعدادات، أو أن رمز الدخول (Token) يملك صلاحية الوصول.`);
+            throw new Error(`لم يتم العثور على المستودع "${RepoConfig.OWNER}/${RepoConfig.NAME}". تأكد من صحة الاسم والتوكن.`);
         }
         throw e;
     }
@@ -293,18 +247,9 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
                  }
             }
 
-            articles.push({
-                fileName: file.name,
-                title,
-                description,
-                image,
-                category,
-                link: file.name
-            });
+            articles.push({ fileName: file.name, title, description, image, category, link: file.name });
             count++;
-        } catch (e) {
-            console.warn(`Failed to parse ${file.name}`);
-        }
+        } catch (e) { console.warn(`Failed to parse ${file.name}`); }
     }
 
     onProgress("تحديث قاعدة البيانات...");
@@ -336,14 +281,11 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     const adSlot = 'YOUR_AD_SLOT_ID';
     
     onProgress("1/5: إنشاء ملف المقال...");
-    
     const fileHtml = buildArticleHtml(data, newFileName, today, adSlot);
 
     try {
         await updateFile(newFileName, fileHtml, `Create Article: ${data.title}`);
-    } catch (e: any) {
-        throw new Error(`Failed Step 1: ${e.message}`);
-    }
+    } catch (e: any) { throw new Error(`Failed Step 1: ${e.message}`); }
 
     const cardHtml = ARTICLE_CARD_TEMPLATE({
         filename: newFileName,
@@ -354,10 +296,9 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     });
 
     onProgress("2/5: التحديث في الصفحة الرئيسية...");
-    // REMOVED: tab-all
     await insertCardIntoFile(RepoConfig.INDEX_FILE, [
         { selector: '#tab-articles', html: cardHtml },
-        { selector: '#tab-home', html: cardHtml }, // Ensure Home tab is targeted
+        { selector: '#tab-home', html: cardHtml },
         { selector: `#tab-${data.category}`, html: cardHtml }
     ], `Add ${newFileName} to index`);
 
@@ -379,17 +320,14 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
 
 export const updateArticle = async (oldFileName: string, data: ArticleContent, onProgress: (msg: string) => void) => {
     onProgress(`جاري تحديث ${oldFileName}...`);
-    
     const { sha } = await getFile(oldFileName);
     const today = new Date().toLocaleDateString('ar-EG');
     const adSlot = 'YOUR_AD_SLOT_ID';
 
     const fileHtml = buildArticleHtml(data, oldFileName, today, adSlot);
-    
     await updateFile(oldFileName, fileHtml, `Update article: ${oldFileName}`, sha);
     
     onProgress("تحديث البطاقات في الصفحة الرئيسية...");
-    
     try {
         const { content: indexContent, sha: indexSha } = await getFile(RepoConfig.INDEX_FILE);
         const indexDoc = new DOMParser().parseFromString(indexContent, 'text/html');
@@ -418,15 +356,12 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
                     temp.innerHTML = cardHtml;
                     if(grid.firstChild) grid.insertBefore(temp.firstElementChild!, grid.firstChild);
                     else grid.appendChild(temp.firstElementChild!);
-                } else {
-                    console.warn(`Warning: Container selector '${selector}' not found in index.html`);
                 }
             }
         };
 
-        // REMOVED: updateInContainer('#tab-all');
         updateInContainer('#tab-articles');
-        updateInContainer('#tab-home'); // Ensure Home tab is targeted
+        updateInContainer('#tab-home');
 
         CATEGORIES.forEach(cat => {
             const tabId = `#tab-${cat.id}`;
@@ -476,7 +411,6 @@ const insertCardIntoFile = async (filePath: string, insertions: {selector: strin
         const parser = new DOMParser();
         const doc = parser.parseFromString(content, 'text/html');
         let modified = false;
-
         insertions.forEach(ins => {
             const container = doc.querySelector(ins.selector);
             if (container) {
@@ -489,11 +423,8 @@ const insertCardIntoFile = async (filePath: string, insertions: {selector: strin
                     else target.appendChild(newNode);
                     modified = true;
                 }
-            } else {
-                console.warn(`Skipping insertion: Selector '${ins.selector}' not found in ${filePath}`);
             }
         });
-
         if (modified) await updateFile(filePath, serializeHtml(doc), commitMsg, sha);
     } catch (e) { console.warn(`Failed to update ${filePath}`, e); }
 };
@@ -503,7 +434,6 @@ const replaceCardInFile = async (filePath: string, href: string, newHtml: string
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
         const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
-        
         if (cards.length > 0) {
             const temp = doc.createElement('div');
             temp.innerHTML = newHtml;
@@ -529,20 +459,27 @@ export const updateSearchData = async (data: ArticleContent, fileName: string) =
         image: "${data.image}"
     },`;
 
-        // 1. Remove existing entry for this file if it exists (Deduplication)
         const dedupeRegex = new RegExp(`\\{[\\s\\S]*?url:\\s*["']${fileName}["'][\\s\\S]*?\\},?\\s*`, 'g');
         let updatedContent = content.replace(dedupeRegex, '');
-
-        // 2. Insert new entry at the start of array
         const startRegex = /(const|var|let)\s+searchIndex\s*=\s*\[/;
         
         if (startRegex.test(updatedContent)) {
             updatedContent = updatedContent.replace(startRegex, `$&\n${newEntry}`);
             await updateFile(filePath, updatedContent, `Update Search Index for ${fileName}`, sha);
-        } else {
-            console.warn("Could not find searchIndex array pattern");
         }
     } catch (e) { console.warn("Search index update failed", e); }
+};
+
+export const removeSearchData = async (fileName: string) => {
+    try {
+        const filePath = 'assets/js/search-data.js';
+        const { content, sha } = await getFile(filePath);
+        const dedupeRegex = new RegExp(`\\{[\\s\\S]*?url:\\s*["']${fileName}["'][\\s\\S]*?\\},?\\s*`, 'g');
+        const updatedContent = content.replace(dedupeRegex, '');
+        if (updatedContent !== content) {
+            await updateFile(filePath, updatedContent, `Remove ${fileName} from Search Index`, sha);
+        }
+    } catch (e) { console.warn("Failed to remove from search index", e); }
 };
 
 export const deleteArticle = async (fileName: string, onProgress: (msg: string) => void) => { 
@@ -550,6 +487,7 @@ export const deleteArticle = async (fileName: string, onProgress: (msg: string) 
     try { const { sha } = await getFile(fileName); await deleteFile(fileName, "Delete", sha); } catch(e) {}
     await deleteCardFromFile(RepoConfig.INDEX_FILE, fileName);
     await deleteCardFromFile(RepoConfig.ARTICLES_FILE, fileName);
+    await removeSearchData(fileName); // Added based on manual instructions
     const { data, sha } = await getMetadata();
     data.articles = data.articles.filter(a => a.file !== fileName);
     await saveMetadata(data, sha);
@@ -561,7 +499,6 @@ const deleteCardFromFile = async (filePath: string, href: string) => {
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
         const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
-        
         if(cards.length > 0) {
             cards.forEach(c => c.remove());
             await updateFile(filePath, serializeHtml(doc), `Remove card ${href}`, sha);
@@ -575,13 +512,14 @@ export const getDirectoryItems = async (): Promise<DirectoryItem[]> => {
     try {
         const { content } = await getFile(RepoConfig.TOOLS_SITES_FILE);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        const cards = Array.from(doc.querySelectorAll('.marquee-text-content')).map(el => el.closest('a')).filter(Boolean) as HTMLAnchorElement[];
-        
-        if (cards.length === 0) {
-             const gridCards = Array.from(doc.querySelectorAll('.grid > a'));
+        // Prioritize grid logic as per manual
+        const gridCards = Array.from(doc.querySelectorAll('.grid > a'));
+        if (gridCards.length > 0) {
              return gridCards.map(card => parseCard(card));
         }
-        return cards.map(card => parseCard(card));
+        // Fallback to legacy marquee logic if needed
+        const marqueeCards = Array.from(doc.querySelectorAll('.marquee-text-content')).map(el => el.closest('a')).filter(Boolean) as HTMLAnchorElement[];
+        return marqueeCards.map(card => parseCard(card));
     } catch { return []; }
 };
 
@@ -662,10 +600,11 @@ export const parseTicker = async (): Promise<TickerData> => {
 
         if (container) {
             const anchor = container.querySelector('a');
-            if (anchor) {
-                return { text: anchor.textContent?.trim() || '', link: anchor.getAttribute('href') || '#' };
-            }
-            return { text: container.textContent?.trim() || '', link: '#' };
+            const span = container.querySelector('span');
+            // Prefer existing element text
+            const text = anchor?.textContent?.trim() || span?.textContent?.trim() || container.textContent?.trim() || '';
+            const link = anchor?.getAttribute('href') || '#';
+            return { text, link };
         }
         return { text: '', link: '' };
     } catch { return { text: '', link: '' }; }
@@ -680,19 +619,27 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
         if (!container) container = doc.querySelector('.animate-marquee');
         
         if (container) {
-            // Check for existing element to preserve classes
+            // Check for existing element to preserve type (span vs a) and classes
             const existingEl = container.querySelector('a') || container.querySelector('span');
             const cssClasses = existingEl ? existingEl.className : "text-white hover:text-blue-300 transition-colors mx-4 font-medium flex items-center";
-            
+            const tagName = existingEl ? existingEl.tagName.toLowerCase() : 'a'; // Default to 'a' if nothing found, or use what's there
+
             container.innerHTML = ''; 
-            const a = doc.createElement('a');
-            a.href = link || '#';
-            a.textContent = text;
-            a.className = cssClasses;
-            // Ensure basic link styling if it was a span
-            if (!a.className.includes('text-')) a.style.color = "inherit";
-            a.style.textDecoration = "none";
-            container.appendChild(a);
+            const newEl = doc.createElement(tagName);
+            
+            if (tagName === 'a') {
+                (newEl as HTMLAnchorElement).href = link || '#';
+            }
+            
+            newEl.textContent = text;
+            newEl.className = cssClasses;
+            
+            // Basic styling for anchors if class missing
+            if (tagName === 'a' && !newEl.className.includes('text-')) {
+                 newEl.style.color = "inherit";
+                 newEl.style.textDecoration = "none";
+            }
+            container.appendChild(newEl);
         }
         
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(doc), "Update Ticker", sha);
@@ -710,32 +657,18 @@ export const getSiteImages = async (): Promise<string[]> => {
 
 export const uploadImage = async (file: File, onProgress: (msg: string) => void, type: 'article' | 'profile' = 'article'): Promise<string> => {
     onProgress("التحقق من الملف...");
-
-    // 1. Validate File Type
-    if (!file.type.startsWith('image/')) {
-        throw new Error("نوع الملف غير مدعوم. يرجى رفع ملف صورة (JPG, PNG, WEBP).");
-    }
-
-    // 2. Validate File Size (Max 5MB)
-    const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-    if (file.size > MAX_SIZE) {
-        throw new Error("حجم الملف كبير جداً. الحد الأقصى هو 5 ميجابايت.");
-    }
+    if (!file.type.startsWith('image/')) throw new Error("نوع الملف غير مدعوم.");
+    const MAX_SIZE = 5 * 1024 * 1024;
+    if (file.size > MAX_SIZE) throw new Error("حجم الملف كبير جداً.");
 
     onProgress("جاري الرفع...");
-    
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = async () => {
             try {
-                // reader.result is "data:image/jpeg;base64,....."
                 const result = reader.result as string;
-                
-                // FIX: Check for base64 header existence to prevent runtime errors
                 const parts = result.split(',');
-                if (parts.length < 2) {
-                     throw new Error("فشل في قراءة ملف الصورة (Invalid Base64)");
-                }
+                if (parts.length < 2) throw new Error("فشل في قراءة ملف الصورة");
                 const base64Content = parts[1];
                 
                 const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -743,7 +676,6 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                 const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
                 const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
 
-                // Check for existing SHA
                 let sha;
                 try {
                     const existing = await fetchGitHub(`${API_BASE}/contents/${path}`);
@@ -751,18 +683,11 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                     sha = json.sha;
                 } catch {}
 
-                // Upload with isBase64 = true
                 await updateFile(path, base64Content, "Upload Image", sha, true);
-                
-                // Update URL generation for Root Domain vs Sub-repo
                 const isRoot = RepoConfig.NAME === `${RepoConfig.OWNER}.github.io`;
                 const baseUrl = `https://${RepoConfig.OWNER}.github.io${isRoot ? '' : '/' + RepoConfig.NAME}`;
-                const url = `${baseUrl}/${path}`;
-                
-                resolve(url);
-            } catch (e: any) {
-                reject(e);
-            }
+                resolve(`${baseUrl}/${path}`);
+            } catch (e: any) { reject(e); }
         };
         reader.onerror = () => reject(new Error("Failed to read file"));
         reader.readAsDataURL(file);
@@ -775,7 +700,6 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
         const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
         const files = await response.json();
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
-
         const cleanUrl = url.split('?')[0]; 
         const newSrc = `${cleanUrl}?v=${Date.now()}`;
 
@@ -785,26 +709,12 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 const doc = new DOMParser().parseFromString(content, 'text/html');
                 const imgs = Array.from(doc.querySelectorAll('img'));
                 let modified = false;
-                
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
-                    
-                    // FIX: Stricter matching logic to avoid false positives on article images
-                    // 1. Check for specific class 'site-avatar' (future proofing)
-                    // 2. Check for specific ID 'profile-image'
-                    // 3. Strict filename check (me.jpg)
-                    const isProfileImage = 
-                        img.classList.contains('site-avatar') ||
-                        img.id === 'profile-image' ||
-                        src.endsWith('/me.jpg') ||
-                        src === 'me.jpg';
-
+                    const isProfileImage = img.classList.contains('site-avatar') || img.id === 'profile-image' || src.endsWith('/me.jpg') || src === 'me.jpg';
                     if (isProfileImage) {
                         img.setAttribute('src', newSrc);
-                        // Ensure we add the marker class for future updates
-                        if (!img.classList.contains('site-avatar')) {
-                            img.classList.add('site-avatar');
-                        }
+                        if (!img.classList.contains('site-avatar')) img.classList.add('site-avatar');
                         modified = true;
                     }
                 });
@@ -821,24 +731,17 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
         const files = await response.json();
         const htmlFiles = files.filter((f: any) => f.name.endsWith('.html'));
-        
         let updatedCount = 0;
         const validCustomImage = imageUrl && imageUrl !== 'undefined' && imageUrl.trim() !== '';
-        
-        const newAdHtml = validCustomImage
-            ? CUSTOM_AD_TEMPLATE(imageUrl, linkUrl) 
-            : HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlotId);
+        const newAdHtml = validCustomImage ? CUSTOM_AD_TEMPLATE(imageUrl, linkUrl) : HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlotId);
 
         for (const file of htmlFiles) {
             try {
-                // Rate limit handled by fetchGitHub, but keeping a small buffer for UI smoothness
                 await wait(50);
-                
                 onProgress(`تحديث ${file.name}...`);
                 const { content, sha } = await getFile(file.path);
                 const doc = new DOMParser().parseFromString(content, 'text/html');
                 let isModified = false;
-
                 const containers = Array.from(doc.querySelectorAll('.hybrid-ad-container'));
                 if (containers.length > 0) {
                     containers.forEach(el => {
@@ -849,7 +752,6 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
                             isModified = true;
                         }
                     });
-                    
                     if (isModified) {
                         await updateFile(file.path, serializeHtml(doc), "Update Ads", sha);
                         updatedCount++;
@@ -861,7 +763,7 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
     } catch (e: any) { onProgress("خطأ: " + e.message); }
 };
 
-// ... (About, Social, and GetArticleDetails functions remain largely the same, included below for completeness) ...
+// ... (About, Social, and GetArticleDetails functions) ...
 
 export const getAboutData = async (): Promise<AboutPageData> => {
     try {
@@ -906,16 +808,12 @@ export const saveAboutData = async (data: AboutPageData, onProgress: (msg: strin
         }
         const profileImg = doc.querySelector('img.rounded-full');
         if (profileImg) profileImg.setAttribute('src', data.image);
-        
         const updateSection = (index: number, title: string, items: string[], color: string) => {
             const uls = doc.querySelectorAll('ul');
             if (uls[index]) {
                 const titleEl = uls[index].previousElementSibling;
                 if (titleEl) titleEl.textContent = title;
-                // FIX: Escape HTML content in list items to prevent XSS
-                uls[index].innerHTML = items.map(item => 
-                    `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${escapeHtml(item)}</li>`
-                ).join('');
+                uls[index].innerHTML = items.map(item => `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${escapeHtml(item)}</li>`).join('');
             }
         };
         updateSection(0, data.section1Title, data.section1Items, 'blue');
@@ -1012,7 +910,6 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
         downloadText = btnLink.querySelector('span')?.textContent || '';
     }
 
-    // Safely extract category from filename if possible, otherwise try parsing HTML
     let category: any = 'tech';
     const parts = fileName.split('-');
     if (['tech', 'apps', 'games', 'sports'].includes(parts[0])) {
