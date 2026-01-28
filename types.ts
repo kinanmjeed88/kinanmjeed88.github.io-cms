@@ -52,7 +52,7 @@ export interface GithubFile {
 
 export enum RepoConfig {
   OWNER = 'kinanmjeed88',
-  NAME = 'Kinan-touch-AD-google',
+  NAME = 'kinanmjeed88.github.io',
   TEMPLATE_FILE = 'article-asus-gx10.html',
   INDEX_FILE = 'index.html',
   ARTICLES_FILE = 'articles.html',

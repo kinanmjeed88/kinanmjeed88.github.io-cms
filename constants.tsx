@@ -81,13 +81,13 @@ export const BASE_ARTICLE_TEMPLATE = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{TITLE}} | TechTouch</title>
     <meta name="description" content="{{DESCRIPTION}}">
-    <link rel="canonical" href="https://kinanmjeed88.github.io/Kinan-touch-AD-google/{{FILENAME}}">
+    <link rel="canonical" href="https://kinanmjeed88.github.io/{{FILENAME}}">
     
     <!-- Meta Tags -->
     <meta property="og:title" content="{{TITLE}}">
     <meta property="og:description" content="{{DESCRIPTION}}">
     <meta property="og:image" content="{{IMAGE}}">
-    <meta property="og:url" content="https://kinanmjeed88.github.io/Kinan-touch-AD-google/{{FILENAME}}">
+    <meta property="og:url" content="https://kinanmjeed88.github.io/{{FILENAME}}">
     <meta name="twitter:card" content="summary_large_image">
 
     <script src="https://cdn.tailwindcss.com"></script>

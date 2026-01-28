@@ -11,6 +11,21 @@ export const getGithubToken = () => GITHUB_TOKEN;
 
 // --- Helpers ---
 
+/**
+ * Validates URLs to prevent JavaScript injection via attributes (e.g. href="javascript:...")
+ * Allows http, https, relative paths, and mailto.
+ */
+const sanitizeUrl = (url: string): string => {
+    if (!url) return '';
+    // Allow http://, https://, / (relative), ./ (relative), mailto:
+    // This rejects javascript:, vbscript:, data:, etc.
+    const safePattern = /^(https?:\/\/|\/|\.\/|mailto:|#)/i;
+    if (safePattern.test(url.trim())) {
+        return url.trim();
+    }
+    return '#'; // Fallback for unsafe URLs
+};
+
 const toBase64 = (str: string): string => {
   return window.btoa(
     encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) =>
@@ -27,11 +42,42 @@ const fromBase64 = (str: string): string => {
   );
 };
 
+// Note: This serializes the entire DOM, potentially changing formatting.
+// This is acceptable for a CMS-controlled static site to maintain DOM integrity.
 const serializeHtml = (doc: Document): string => {
     const doctype = "<!DOCTYPE html>";
     const html = doc.documentElement.outerHTML;
     return `${doctype}\n${html}`;
 };
+
+/**
+ * Basic HTML escaping to prevent XSS attacks in text content.
+ */
+const escapeHtml = (unsafe: string): string => {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+};
+
+/**
+ * Encodes file path segments to ensure valid URL (handles spaces, special chars)
+ */
+const encodePath = (path: string): string => {
+    return path.split('/').map(encodeURIComponent).join('/');
+};
+
+// --- TEMPLATES (Using Sanitizers) ---
+
+const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
+<div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
+    <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
+    <a href="${sanitizeUrl(linkUrl) || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
+        <img src="${sanitizeUrl(imageUrl)}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
+    </a>
+</div>`;
 
 const getHeaders = () => {
   if (!GITHUB_TOKEN) throw new Error("GitHub Token not set");
@@ -42,17 +88,57 @@ const getHeaders = () => {
   };
 };
 
-const fetchGitHub = async (url: string, options: RequestInit = {}) => {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        let errMsg = `GitHub Error ${response.status}: ${response.statusText}`;
-        try {
-            const errBody = await response.json();
-            if (errBody.message) errMsg += ` - ${errBody.message}`;
-        } catch { }
-        throw new Error(errMsg);
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Robust Fetch with Retry-After Header & Strict 403 Handling
+ */
+const fetchGitHub = async (url: string, options: RequestInit = {}, retries = 3, backoff = 1000) => {
+    try {
+        const response = await fetch(url, options);
+        
+        // Handle Rate Limiting (403 or 429)
+        if (response.status === 403 || response.status === 429) {
+            // Check specific rate limit headers to distinguish from Permission Denied (403)
+            const rateLimitRemaining = response.headers.get('x-ratelimit-remaining');
+            const isRateLimit = rateLimitRemaining && parseInt(rateLimitRemaining) === 0;
+            
+            // If it's a 429 (Too Many Requests) OR a 403 caused strictly by Rate Limit
+            if (response.status === 429 || isRateLimit) {
+                if (retries > 0) {
+                    const retryAfter = response.headers.get('retry-after');
+                    let waitTime = backoff;
+                    
+                    if (retryAfter) {
+                        const seconds = parseInt(retryAfter, 10);
+                        if (!isNaN(seconds)) {
+                            waitTime = (seconds * 1000) + 500;
+                        }
+                    }
+
+                    console.warn(`Rate limited. Retrying in ${waitTime}ms...`);
+                    await wait(waitTime);
+                    return fetchGitHub(url, options, retries - 1, backoff * 2);
+                }
+            } else if (response.status === 403) {
+                 // If 403 but NOT a rate limit, it's a permission error. Do not retry.
+                 const body = await response.json().catch(() => ({}));
+                 throw new Error(`Permission Denied (403). Check Token Scopes. ${body.message || ''}`);
+            }
+        }
+
+        if (!response.ok) {
+            let errMsg = `GitHub Error ${response.status}: ${response.statusText}`;
+            try {
+                const errBody = await response.json();
+                if (errBody.message) errMsg += ` - ${errBody.message}`;
+            } catch { }
+            throw new Error(errMsg);
+        }
+        return response;
+    } catch (e: any) {
+        throw e;
     }
-    return response;
 };
 
 const API_BASE = `https://api.github.com/repos/${RepoConfig.OWNER}/${RepoConfig.NAME}`;
@@ -68,40 +154,36 @@ const getYouTubeId = (url: string): string | null => {
 // --- CORE FUNCTIONS ---
 
 export const getFile = async (path: string): Promise<{ content: string; sha: string }> => {
-  const response = await fetchGitHub(`${API_BASE}/contents/${path}?t=${Date.now()}`, { headers: getHeaders() });
+  const encodedPath = encodePath(path);
+  const response = await fetchGitHub(`${API_BASE}/contents/${encodedPath}?t=${Date.now()}`, { headers: getHeaders() });
   const data: GithubFile = await response.json();
   if (!data.content) throw new Error("File content is empty");
   return { content: fromBase64(data.content), sha: data.sha };
 };
 
 export const updateFile = async (path: string, content: string, message: string, sha?: string, isBase64: boolean = false): Promise<void> => {
+  const encodedPath = encodePath(path);
   const body: any = { message, content: isBase64 ? content : toBase64(content) };
   if (sha) body.sha = sha;
-  await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
+  await fetchGitHub(`${API_BASE}/contents/${encodedPath}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
 };
 
 export const deleteFile = async (path: string, message: string, sha: string): Promise<void> => {
-  await fetchGitHub(`${API_BASE}/contents/${path}`, { method: "DELETE", headers: getHeaders(), body: JSON.stringify({ message, sha }) });
+  const encodedPath = encodePath(path);
+  await fetchGitHub(`${API_BASE}/contents/${encodedPath}`, { method: "DELETE", headers: getHeaders(), body: JSON.stringify({ message, sha }) });
 };
 
 // --- BUSINESS LOGIC HELPERS ---
 
-/**
- * Robust slug generation that supports Arabic and falls back to timestamp if empty.
- */
 const generateSlug = (title: string): string => {
-    // Replace spaces with hyphens, remove special chars but keep Arabic (u0600-u06FF) and English/Numbers
     let slug = title.trim()
         .replace(/\s+/g, '-')
         .replace(/[^\w\u0600-\u06FF\-]+/g, '') 
         .toLowerCase();
     
-    // Remove duplicate hyphens
     slug = slug.replace(/-+/g, '-');
-    // Remove leading/trailing hyphens
     slug = slug.replace(/^-+|-+$/g, '');
 
-    // Fallback if slug is too short or empty
     if (!slug || slug.length < 2) {
         slug = `post-${Date.now()}`;
     }
@@ -109,9 +191,6 @@ const generateSlug = (title: string): string => {
     return slug;
 };
 
-/**
- * DRY Principle: Centralized HTML builder for Create and Update operations.
- */
 const buildArticleHtml = (data: ArticleContent, fileName: string, today: string, adSlot: string): string => {
     let bodyContent = '';
     
@@ -123,7 +202,7 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
 <div class="video-container my-10 shadow-2xl rounded-2xl overflow-hidden border border-gray-800 relative w-full aspect-video">
     <iframe 
         src="https://www.youtube.com/embed/${videoId}" 
-        title="${data.title}" 
+        title="${escapeHtml(data.title)}" 
         class="absolute inset-0 w-full h-full"
         allowfullscreen>
     </iframe>
@@ -131,27 +210,37 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
         }
     }
 
-    // 2. Main Content (Markdown-like parsing)
+    // 2. Main Content (Sanitized)
     const lines = data.mainText.split('\n').filter(p => p.trim());
     lines.forEach(line => {
-        if (line.startsWith('###')) bodyContent += `<h3>${line.replace('###', '').trim()}</h3>`;
-        else if (line.startsWith('##')) bodyContent += `<h2>${line.replace('##', '').trim()}</h2>`;
-        else bodyContent += `<p>${line}</p>`;
+        // Markdown headers supported, but content is escaped
+        if (line.startsWith('###')) {
+            const content = line.replace('###', '').trim();
+            bodyContent += `<h3>${escapeHtml(content)}</h3>`;
+        }
+        else if (line.startsWith('##')) {
+            const content = line.replace('##', '').trim();
+            bodyContent += `<h2>${escapeHtml(content)}</h2>`;
+        }
+        else {
+            bodyContent += `<p>${escapeHtml(line)}</p>`;
+        }
     });
 
     // 3. Download Button
     if (data.downloadLink) {
         const btnText = data.downloadText && data.downloadText.trim() !== '' ? data.downloadText : 'اضغط هنا';
-        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(data.downloadLink, btnText);
+        // Strict URL sanitization for href
+        bodyContent += DOWNLOAD_BUTTON_TEMPLATE(sanitizeUrl(data.downloadLink), escapeHtml(btnText));
     }
 
     const adHtml = HYBRID_AD_TEMPLATE('https://placehold.co/600x250', '#', adSlot);
     
     return BASE_ARTICLE_TEMPLATE
-        .replace(/{{TITLE}}/g, data.title)
-        .replace(/{{DESCRIPTION}}/g, data.description)
+        .replace(/{{TITLE}}/g, escapeHtml(data.title))
+        .replace(/{{DESCRIPTION}}/g, escapeHtml(data.description))
         .replace(/{{FILENAME}}/g, fileName)
-        .replace(/{{IMAGE}}/g, data.image)
+        .replace(/{{IMAGE}}/g, sanitizeUrl(data.image)) // Strict attribute sanitization
         .replace(/{{DATE}}/g, today)
         .replace('{{AD_SLOT_BOTTOM}}', adHtml)
         .replace('{{CONTENT_BODY}}', bodyContent);
@@ -161,8 +250,16 @@ const buildArticleHtml = (data: ArticleContent, fileName: string, today: string,
 
 export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): Promise<ArticleMetadata[]> => {
     onProgress("جلب قائمة الملفات من GitHub...");
-    const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
-    const files = await response.json();
+    let files;
+    try {
+        const response = await fetchGitHub(`${API_BASE}/contents`, { headers: getHeaders() });
+        files = await response.json();
+    } catch (e: any) {
+        if (e.message.includes('404')) {
+            throw new Error(`لم يتم العثور على المستودع "${RepoConfig.OWNER}/${RepoConfig.NAME}". يرجى التأكد من الاسم والصلاحيات.`);
+        }
+        throw e;
+    }
     
     const systemFiles = ['index.html', 'articles.html', 'about.html', 'tools.html', 'tools-sites.html', 'tools-phones.html', 'tools-compare.html', 'tool-analysis.html', '404.html'];
     const articleFiles = files.filter((f: any) => 
@@ -184,15 +281,16 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
             const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
             const image = doc.querySelector('#main-image')?.getAttribute('src') || doc.querySelector('main img')?.getAttribute('src') || '';
             
-            // Extract category logic
             let category: any = 'tech';
-            const catLabel = doc.querySelector('.absolute.bottom-0.right-0')?.textContent?.trim();
-            if (catLabel) {
-                 const found = CATEGORIES.find(c => c.label === catLabel);
-                 if (found) category = found.id;
+            const filenameParts = file.name.split('-');
+            if (['tech', 'apps', 'games', 'sports'].includes(filenameParts[0])) {
+                category = filenameParts[0];
             } else {
-                 const firstPart = file.name.split('-')[0];
-                 if (['tech', 'apps', 'games', 'sports'].includes(firstPart)) category = firstPart;
+                 const catLabel = doc.querySelector('.absolute.bottom-0.right-0')?.textContent?.trim();
+                 if (catLabel) {
+                      const found = CATEGORIES.find(c => c.label === catLabel);
+                      if (found) category = found.id;
+                 }
             }
 
             articles.push({
@@ -259,6 +357,7 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     await insertCardIntoFile(RepoConfig.INDEX_FILE, [
         { selector: '#tab-all', html: cardHtml },
         { selector: '#tab-articles', html: cardHtml },
+        { selector: '#tab-home', html: cardHtml }, // Fix: Add to Home Tab
         { selector: `#tab-${data.category}`, html: cardHtml }
     ], `Add ${newFileName} to index`);
 
@@ -270,7 +369,6 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     onProgress("4/5: تحديث محرك البحث...");
     await updateSearchData(data, newFileName);
 
-    // Update Metadata cache
     const { data: metaData, sha: metaSha } = await getMetadata();
     const newEntry: ArticleEntry = { id: newFileName.replace('.html',''), title: data.title, slug: newFileName.replace('.html', ''), excerpt: data.description, image: data.image, date: today, category: data.category, file: newFileName };
     metaData.articles.unshift(newEntry);
@@ -282,12 +380,12 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
 export const updateArticle = async (oldFileName: string, data: ArticleContent, onProgress: (msg: string) => void) => {
     onProgress(`جاري تحديث ${oldFileName}...`);
     
-    // Check if we need to preserve existing SHA
     const { sha } = await getFile(oldFileName);
     const today = new Date().toLocaleDateString('ar-EG');
     const adSlot = 'YOUR_AD_SLOT_ID';
 
-    // Rebuild full HTML to ensure structure consistency
+    // Stateless regeneration is intended here to enforce the latest design templates.
+    // Content preservation relies on robust extraction in 'getArticleDetails'.
     const fileHtml = buildArticleHtml(data, oldFileName, today, adSlot);
     
     await updateFile(oldFileName, fileHtml, `Update article: ${oldFileName}`, sha);
@@ -306,20 +404,15 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
             category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
         });
 
-        // Update in All/Articles tabs
         const updateInContainer = (selector: string) => {
-            // Try exact match first, then fuzzy
             let card = indexDoc.querySelector(`${selector} a[href="${oldFileName}"]`) || 
                        indexDoc.querySelector(`${selector} a[href*="${oldFileName}"]`);
 
             if (card) {
                 const temp = indexDoc.createElement('div');
                 temp.innerHTML = cardHtml;
-                // Replace the parent wrapper if it exists (assuming <a> is wrapped in <div> in some templates, but here card is <a>)
-                // The template returns <a>...</a>.
                 card.replaceWith(temp.firstElementChild!);
             } else {
-                // Insert at top if missing
                 const container = indexDoc.querySelector(selector);
                 if (container) {
                     const grid = container.classList.contains('grid') ? container : container.querySelector('.grid') || container;
@@ -327,14 +420,16 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
                     temp.innerHTML = cardHtml;
                     if(grid.firstChild) grid.insertBefore(temp.firstElementChild!, grid.firstChild);
                     else grid.appendChild(temp.firstElementChild!);
+                } else {
+                    console.warn(`Warning: Container selector '${selector}' not found in index.html`);
                 }
             }
         };
 
         updateInContainer('#tab-all');
         updateInContainer('#tab-articles');
+        updateInContainer('#tab-home'); // Fix: Update Home Tab
 
-        // Handle Category Changes
         CATEGORIES.forEach(cat => {
             const tabId = `#tab-${cat.id}`;
             let cardInTab = indexDoc.querySelector(`${tabId} a[href="${oldFileName}"]`) || 
@@ -363,7 +458,6 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
         await updateFile(RepoConfig.INDEX_FILE, serializeHtml(indexDoc), `Update index for ${oldFileName}`, indexSha);
     } catch (e) { console.warn("Index update failed", e); }
 
-    // Update Articles Page
     await replaceCardInFile(RepoConfig.ARTICLES_FILE, oldFileName, ARTICLE_CARD_TEMPLATE({
         filename: oldFileName,
         title: data.title,
@@ -371,6 +465,9 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
         image: data.image,
         category: CATEGORIES.find(c => c.id === data.category)?.label || 'Tech'
     }));
+
+    onProgress("تحديث محرك البحث...");
+    await updateSearchData(data, oldFileName);
 
     onProgress("تم التحديث!");
 };
@@ -394,6 +491,8 @@ const insertCardIntoFile = async (filePath: string, insertions: {selector: strin
                     else target.appendChild(newNode);
                     modified = true;
                 }
+            } else {
+                console.warn(`Skipping insertion: Selector '${ins.selector}' not found in ${filePath}`);
             }
         });
 
@@ -405,7 +504,6 @@ const replaceCardInFile = async (filePath: string, href: string, newHtml: string
     try {
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        // Combined Selector for exact or relative path match
         const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
         
         if (cards.length > 0) {
@@ -420,10 +518,6 @@ const replaceCardInFile = async (filePath: string, href: string, newHtml: string
     } catch (e) {}
 };
 
-/**
- * More robust Search Data Updater.
- * Inserts the new item at the start of the array by matching `const searchIndex = [`
- */
 export const updateSearchData = async (data: ArticleContent, fileName: string) => {
     try {
         const filePath = 'assets/js/search-data.js';
@@ -437,12 +531,15 @@ export const updateSearchData = async (data: ArticleContent, fileName: string) =
         image: "${data.image}"
     },`;
 
-        // Flexible regex to match the start of the array definition
-        // Handles: const searchIndex = [ OR var searchIndex=[ etc.
-        const regex = /(const|var|let)\s+searchIndex\s*=\s*\[/;
+        // 1. Remove existing entry for this file if it exists (Deduplication)
+        const dedupeRegex = new RegExp(`\\{[\\s\\S]*?url:\\s*["']${fileName}["'][\\s\\S]*?\\},?\\s*`, 'g');
+        let updatedContent = content.replace(dedupeRegex, '');
+
+        // 2. Insert new entry at the start of array
+        const startRegex = /(const|var|let)\s+searchIndex\s*=\s*\[/;
         
-        if (regex.test(content)) {
-            const updatedContent = content.replace(regex, `$&\n${newEntry}`);
+        if (startRegex.test(updatedContent)) {
+            updatedContent = updatedContent.replace(startRegex, `$&\n${newEntry}`);
             await updateFile(filePath, updatedContent, `Update Search Index for ${fileName}`, sha);
         } else {
             console.warn("Could not find searchIndex array pattern");
@@ -461,14 +558,10 @@ export const deleteArticle = async (fileName: string, onProgress: (msg: string) 
     onProgress("تم الحذف!");
 };
 
-/**
- * Robust deletion: handles full URL or relative paths matches
- */
 const deleteCardFromFile = async (filePath: string, href: string) => {
     try {
         const { content, sha } = await getFile(filePath);
         const doc = new DOMParser().parseFromString(content, 'text/html');
-        // Match href exactly or matches ending with filename
         const cards = Array.from(doc.querySelectorAll(`a[href="${href}"], a[href*="${href}"]`));
         
         if(cards.length > 0) {
@@ -612,11 +705,20 @@ export const getSiteImages = async (): Promise<string[]> => {
     } catch { return []; }
 };
 
-/**
- * Optimized Image Upload using FileReader for binary handling.
- * This is simpler and uses less memory than manual byte loops.
- */
 export const uploadImage = async (file: File, onProgress: (msg: string) => void, type: 'article' | 'profile' = 'article'): Promise<string> => {
+    onProgress("التحقق من الملف...");
+
+    // 1. Validate File Type
+    if (!file.type.startsWith('image/')) {
+        throw new Error("نوع الملف غير مدعوم. يرجى رفع ملف صورة (JPG, PNG, WEBP).");
+    }
+
+    // 2. Validate File Size (Max 5MB)
+    const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+    if (file.size > MAX_SIZE) {
+        throw new Error("حجم الملف كبير جداً. الحد الأقصى هو 5 ميجابايت.");
+    }
+
     onProgress("جاري الرفع...");
     
     return new Promise((resolve, reject) => {
@@ -625,8 +727,13 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
             try {
                 // reader.result is "data:image/jpeg;base64,....."
                 const result = reader.result as string;
-                // We strip the prefix to get the raw base64 of the binary
-                const base64Content = result.split(',')[1];
+                
+                // FIX: Check for base64 header existence to prevent runtime errors
+                const parts = result.split(',');
+                if (parts.length < 2) {
+                     throw new Error("فشل في قراءة ملف الصورة (Invalid Base64)");
+                }
+                const base64Content = parts[1];
                 
                 const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 const ext = file.name.split('.').pop() || 'jpg';
@@ -644,7 +751,11 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                 // Upload with isBase64 = true
                 await updateFile(path, base64Content, "Upload Image", sha, true);
                 
-                const url = `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${path}`;
+                // Update URL generation for Root Domain vs Sub-repo
+                const isRoot = RepoConfig.NAME === `${RepoConfig.OWNER}.github.io`;
+                const baseUrl = `https://${RepoConfig.OWNER}.github.io${isRoot ? '' : '/' + RepoConfig.NAME}`;
+                const url = `${baseUrl}/${path}`;
+                
                 resolve(url);
             } catch (e: any) {
                 reject(e);
@@ -655,9 +766,6 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
     });
 };
 
-/**
- * More specific avatar update to prevent false positives.
- */
 export const updateSiteAvatar = async (url: string, onProgress: (msg: string) => void) => {
     onProgress("تحديث الروابط في HTML...");
      try {
@@ -677,17 +785,23 @@ export const updateSiteAvatar = async (url: string, onProgress: (msg: string) =>
                 
                 imgs.forEach(img => {
                     const src = img.getAttribute('src') || '';
-                    const alt = img.getAttribute('alt') || '';
                     
-                    // Strict check for profile image candidates
+                    // FIX: Stricter matching logic to avoid false positives on article images
+                    // 1. Check for specific class 'site-avatar' (future proofing)
+                    // 2. Check for specific ID 'profile-image'
+                    // 3. Strict filename check (me.jpg)
                     const isProfileImage = 
-                        src.includes('me.jpg') || 
-                        src.includes('profile.') ||
-                        (alt && alt.includes('كنان')) ||
-                        (alt && alt.toLowerCase().includes('profile'));
+                        img.classList.contains('site-avatar') ||
+                        img.id === 'profile-image' ||
+                        src.endsWith('/me.jpg') ||
+                        src === 'me.jpg';
 
                     if (isProfileImage) {
                         img.setAttribute('src', newSrc);
+                        // Ensure we add the marker class for future updates
+                        if (!img.classList.contains('site-avatar')) {
+                            img.classList.add('site-avatar');
+                        }
                         modified = true;
                     }
                 });
@@ -714,8 +828,8 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
 
         for (const file of htmlFiles) {
             try {
-                // Rate limit protection - small delay
-                await new Promise(r => setTimeout(r, 100));
+                // Rate limit handled by fetchGitHub, but keeping a small buffer for UI smoothness
+                await wait(50);
                 
                 onProgress(`تحديث ${file.name}...`);
                 const { content, sha } = await getFile(file.path);
@@ -743,14 +857,6 @@ export const updateGlobalAds = async (imageUrl: string, linkUrl: string, adSlotI
         onProgress(`تم تحديث الإعلانات في ${updatedCount} صفحة!`);
     } catch (e: any) { onProgress("خطأ: " + e.message); }
 };
-
-const CUSTOM_AD_TEMPLATE = (imageUrl: string, linkUrl: string) => `
-<div class="hybrid-ad-container group relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800 min-h-[280px] my-8 shadow-sm">
-    <div class="ad-badge absolute top-0 left-0 bg-gray-200 dark:bg-gray-700 text-[10px] px-2 py-0.5 rounded-br text-gray-500 z-20">إعلان</div>
-    <a href="${linkUrl || '#'}" target="_blank" class="ad-fallback absolute inset-0 z-0 flex items-center justify-center bg-slate-200 dark:bg-slate-900" style="z-index: 10;">
-        <img src="${imageUrl}" alt="إعلان" style="width: 100%; height: 100%; object-fit: cover;" />
-    </a>
-</div>`;
 
 // ... (About, Social, and GetArticleDetails functions remain largely the same, included below for completeness) ...
 
@@ -797,12 +903,16 @@ export const saveAboutData = async (data: AboutPageData, onProgress: (msg: strin
         }
         const profileImg = doc.querySelector('img.rounded-full');
         if (profileImg) profileImg.setAttribute('src', data.image);
+        
         const updateSection = (index: number, title: string, items: string[], color: string) => {
             const uls = doc.querySelectorAll('ul');
             if (uls[index]) {
                 const titleEl = uls[index].previousElementSibling;
                 if (titleEl) titleEl.textContent = title;
-                uls[index].innerHTML = items.map(item => `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${item}</li>`).join('');
+                // FIX: Escape HTML content in list items to prevent XSS
+                uls[index].innerHTML = items.map(item => 
+                    `<li class="flex items-start gap-2"><span class="text-${color}-500">•</span> ${escapeHtml(item)}</li>`
+                ).join('');
             }
         };
         updateSection(0, data.section1Title, data.section1Items, 'blue');
@@ -898,12 +1008,26 @@ export const getArticleDetails = async (fileName: string): Promise<ArticleConten
         downloadLink = btnLink.getAttribute('href') || '';
         downloadText = btnLink.querySelector('span')?.textContent || '';
     }
+
+    // Safely extract category from filename if possible, otherwise try parsing HTML
+    let category: any = 'tech';
+    const parts = fileName.split('-');
+    if (['tech', 'apps', 'games', 'sports'].includes(parts[0])) {
+        category = parts[0];
+    } else {
+        const catLabel = doc.querySelector('.absolute.bottom-0.right-0')?.textContent?.trim();
+        if (catLabel) {
+            const found = CATEGORIES.find(c => c.label === catLabel);
+            if (found) category = found.id;
+        }
+    }
+
     return {
         fileName,
         title: doc.querySelector('h1')?.textContent || '',
         description: doc.querySelector('meta[name="description"]')?.getAttribute('content') || '',
         image: doc.querySelector('#main-image')?.getAttribute('src') || '',
-        category: 'tech',
+        category: category,
         mainText: mainText.trim(),
         videoUrl,
         downloadLink,

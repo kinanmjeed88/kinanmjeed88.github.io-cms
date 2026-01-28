@@ -60,7 +60,8 @@ export const ArticleList: React.FC<Props> = ({ onEdit }) => {
     if (!path) return '';
     if (path.startsWith('http') || path.startsWith('data:')) return path;
     const cleanPath = path.startsWith('/') ? path.slice(1) : path;
-    return `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${cleanPath}`;
+    const isRoot = RepoConfig.NAME === `${RepoConfig.OWNER}.github.io`;
+    return `https://${RepoConfig.OWNER}.github.io${isRoot ? '' : '/' + RepoConfig.NAME}/${cleanPath}`;
   };
 
   return (
@@ -114,7 +115,7 @@ export const ArticleList: React.FC<Props> = ({ onEdit }) => {
               
               <div className="flex items-center justify-between pt-3 border-t border-slate-700 mt-auto">
                 <a 
-                  href={`https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${article.fileName}`} 
+                  href={`https://${RepoConfig.OWNER}.github.io${RepoConfig.NAME === `${RepoConfig.OWNER}.github.io` ? '' : '/' + RepoConfig.NAME}/${article.fileName}`} 
                   target="_blank" 
                   rel="noreferrer"
                   className="text-blue-400 hover:text-blue-300 flex items-center text-xs"

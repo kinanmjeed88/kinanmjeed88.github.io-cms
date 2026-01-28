@@ -42,7 +42,8 @@ export const AdsManager: React.FC = () => {
     if (!path) return '';
     if (path.startsWith('http') || path.startsWith('data:')) return path;
     const cleanPath = path.startsWith('/') ? path.slice(1) : path;
-    return `https://${RepoConfig.OWNER}.github.io/${RepoConfig.NAME}/${cleanPath}`;
+    const isRoot = RepoConfig.NAME === `${RepoConfig.OWNER}.github.io`;
+    return `https://${RepoConfig.OWNER}.github.io${isRoot ? '' : '/' + RepoConfig.NAME}/${cleanPath}`;
   };
 
   return (
