@@ -256,7 +256,7 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
         files = await response.json();
     } catch (e: any) {
         if (e.message.includes('404')) {
-            throw new Error(`لم يتم العثور على المستودع "${RepoConfig.OWNER}/${RepoConfig.NAME}". يرجى التأكد من الاسم والصلاحيات.`);
+            throw new Error(`لم يتم العثور على المستودع "${RepoConfig.OWNER}/${RepoConfig.NAME}". يرجى التأكد من الاسم في الإعدادات، أو أن رمز الدخول (Token) يملك صلاحية الوصول.`);
         }
         throw e;
     }
@@ -354,10 +354,10 @@ export const createArticle = async (data: ArticleContent, onProgress: (msg: stri
     });
 
     onProgress("2/5: التحديث في الصفحة الرئيسية...");
+    // REMOVED: tab-all
     await insertCardIntoFile(RepoConfig.INDEX_FILE, [
-        { selector: '#tab-all', html: cardHtml },
         { selector: '#tab-articles', html: cardHtml },
-        { selector: '#tab-home', html: cardHtml }, // Fix: Add to Home Tab
+        { selector: '#tab-home', html: cardHtml }, // Ensure Home tab is targeted
         { selector: `#tab-${data.category}`, html: cardHtml }
     ], `Add ${newFileName} to index`);
 
@@ -384,8 +384,6 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
     const today = new Date().toLocaleDateString('ar-EG');
     const adSlot = 'YOUR_AD_SLOT_ID';
 
-    // Stateless regeneration is intended here to enforce the latest design templates.
-    // Content preservation relies on robust extraction in 'getArticleDetails'.
     const fileHtml = buildArticleHtml(data, oldFileName, today, adSlot);
     
     await updateFile(oldFileName, fileHtml, `Update article: ${oldFileName}`, sha);
@@ -426,9 +424,9 @@ export const updateArticle = async (oldFileName: string, data: ArticleContent, o
             }
         };
 
-        updateInContainer('#tab-all');
+        // REMOVED: updateInContainer('#tab-all');
         updateInContainer('#tab-articles');
-        updateInContainer('#tab-home'); // Fix: Update Home Tab
+        updateInContainer('#tab-home'); // Ensure Home tab is targeted
 
         CATEGORIES.forEach(cat => {
             const tabId = `#tab-${cat.id}`;
@@ -682,12 +680,17 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
         if (!container) container = doc.querySelector('.animate-marquee');
         
         if (container) {
+            // Check for existing element to preserve classes
+            const existingEl = container.querySelector('a') || container.querySelector('span');
+            const cssClasses = existingEl ? existingEl.className : "text-white hover:text-blue-300 transition-colors mx-4 font-medium flex items-center";
+            
             container.innerHTML = ''; 
             const a = doc.createElement('a');
-            a.href = link;
+            a.href = link || '#';
             a.textContent = text;
-            a.className = "text-white hover:text-blue-300 transition-colors mx-4 font-medium flex items-center"; 
-            a.style.color = "inherit";
+            a.className = cssClasses;
+            // Ensure basic link styling if it was a span
+            if (!a.className.includes('text-')) a.style.color = "inherit";
             a.style.textDecoration = "none";
             container.appendChild(a);
         }
