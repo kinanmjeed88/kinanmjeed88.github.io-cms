@@ -215,7 +215,8 @@ export const syncArticlesFromFiles = async (onProgress: (msg: string) => void): 
         throw e;
     }
     
-    const systemFiles = ['index.html', 'articles.html', 'about.html', 'tools.html', 'tools-sites.html', 'tools-phones.html', 'tools-compare.html', 'tool-analysis.html', '404.html'];
+    // Updated system files based on screenshot (added site-map.html and privacy.html)
+    const systemFiles = ['index.html', 'articles.html', 'about.html', 'tools.html', 'tools-sites.html', 'tools-phones.html', 'tools-compare.html', 'tool-analysis.html', '404.html', 'privacy.html', 'site-map.html'];
     const articleFiles = files.filter((f: any) => 
         f.name.endsWith('.html') && 
         f.name.includes('-') && 
@@ -649,7 +650,8 @@ export const saveTicker = async (text: string, link: string, onProgress: (msg: s
 
 export const getSiteImages = async (): Promise<string[]> => { 
     try {
-        const res = await fetchGitHub(`${API_BASE}/contents/assets/images/uploads`);
+        // Changed from assets/images/uploads to assets/images based on repo screenshots
+        const res = await fetchGitHub(`${API_BASE}/contents/assets/images`);
         const files = await res.json();
         return Array.isArray(files) ? files.map((f:any) => f.download_url) : [];
     } catch { return []; }
@@ -674,7 +676,8 @@ export const uploadImage = async (file: File, onProgress: (msg: string) => void,
                 const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 const ext = file.name.split('.').pop() || 'jpg';
                 const filename = type === 'profile' ? 'me.jpg' : `img_${uniqueSuffix}.${ext}`;
-                const path = `assets/images/${type === 'profile' ? '' : 'uploads/'}${filename}`;
+                // Simplified path: everything goes to assets/images/
+                const path = `assets/images/${filename}`;
 
                 let sha;
                 try {
